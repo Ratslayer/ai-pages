@@ -1,0 +1,101 @@
+name: Publish catalog
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-catalog
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sources: ${{ steps.sources.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s tests -p test_publish_catalog.py
+      - name: Read catalog sources
+        id: sources
+        run: |
+          sources="$(python3 scripts/publish_catalog.py)"
+          printf 'matrix=%s\n' "$sources" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.page.id }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        page: ${{ fromJSON(needs.plan.outputs.sources) }}
+    steps:
+      - name: Check access to private source
+        if: matrix.page.private
+        env:
+          SOURCE_TOKEN: ${{ secrets.AI_PAGES_SOURCE_TOKEN }}
+        run: |
+          if [ -z "$SOURCE_TOKEN" ]; then
+            echo "::error::Set AI_PAGES_SOURCE_TOKEN in AI Pages with Contents read access to the private sources."
+            exit 1
+          fi
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ matrix.page.repository }}
+          ref: ${{ matrix.page.ref }}
+          token: ${{ matrix.page.private && secrets.AI_PAGES_SOURCE_TOKEN || github.token }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Compile tool
+        env:
+          PRIVATE_SOURCE: ${{ matrix.page.private }}
+        run: |
+          log="$(mktemp)"
+          if ! (npm ci && npm run build) > "$log" 2>&1; then
+            if [ "$PRIVATE_SOURCE" = false ]; then
+              cat "$log"
+            fi
+            echo "::error::The tool build failed. Check the source repository's build."
+            exit 1
+          fi
+          test -d dist && test ! -L dist
+          for file in dist/index.html dist/app.js dist/style.css; do
+            test -f "$file" && test ! -L "$file" || { echo "::error::Missing build output $file"; exit 1; }
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: page-${{ matrix.page.id }}
+          path: |
+            dist/index.html
+            dist/app.js
+            dist/style.css
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: page-*
+          path: artifacts
+      - name: Sign and publish
+        run: python3 scripts/publish_catalog.py --artifacts artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          AI_PAGES_SIGNING_KEY: ${{ secrets.AI_PAGES_SIGNING_KEY }}

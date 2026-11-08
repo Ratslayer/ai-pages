@@ -126,7 +126,7 @@ public final class MainActivity extends ComponentActivity {
             Map<String, PageFeed.Page> pages = feed.cachedPages();
             if (pages.isEmpty()) {
                 TextView empty = new TextView(this);
-                empty.setText("Configure the private GitHub feed, then refresh to download tools.");
+                empty.setText("Configure the tool catalog, then refresh to download tools.");
                 body.addView(empty);
             }
             for (PageFeed.Page page : pages.values()) {
@@ -150,14 +150,14 @@ public final class MainActivity extends ComponentActivity {
 
     private void configureFeed() {
         LinearLayout fields = column();
-        EditText token = secretField("GitHub read token", 256);
+        EditText token = secretField("GitHub read token (optional)", 256);
         EditText key = new EditText(this);
         key.setHint("Catalog signing public key");
         key.setText(feed.publicKey());
         fields.addView(token);
         fields.addView(key);
-        new AlertDialog.Builder(this).setTitle("Private GitHub feed")
-                .setMessage("Use a token scoped to AI Pages with Contents read-only. Leave it blank to keep an existing token.")
+        new AlertDialog.Builder(this).setTitle("Tool updates")
+                .setMessage("For the public AI Pages catalog, enter the signing public key and leave the GitHub token blank. Saving a blank token clears any saved token.")
                 .setView(fields).setNegativeButton("Cancel", null).setPositiveButton("Save", (dialog, button) -> {
                     String credential = token.getText().toString().trim();
                     String publicKey = key.getText().toString().trim();
