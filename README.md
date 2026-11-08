@@ -40,6 +40,8 @@ The matching private PEM belongs in the [AI Pages Actions secrets](https://githu
 
 Changes to the [Home and Settings sources](shell/) or tool registry on `main` trigger **Publish catalog**. Run it manually when a tool changes in its own repo. Home lists the tools in the downloaded catalog. Settings uses the app's native sign-in and update controls. Cached pages work offline. **Recovery** opens the built-in controls for refreshing, importing a signed catalog, and restoring the previous bundle. It also opens at startup if the app has yet to download Home and Settings.
 
+Each Home tile shows the downloaded tool version. Versions start at v1 and increase when that tool's published HTML, JavaScript, or CSS changes.
+
 If you deliberately rotate the signing key, update the secret and the committed public key together, then publish. Existing installations warn and stop accepting updates until you paste the new key from your signing machine into **Configure updates** and refresh. Use the same key file for future APK builds.
 
 Add new pages to [catalog-sources.json](catalog-sources.json). Each source repo uses Node 22 and emits `dist/index.html`, `dist/app.js`, and `dist/style.css` with `npm ci` and `npm run build`. Add a new private source to the read token's repository access. Public sources need only a list entry. The compiled pages are published in the public AI Pages catalog.

@@ -55,6 +55,7 @@ h2 { margin: 0; font-size: 1.16rem; }
     overflow-wrap: anywhere;
 }
 .tile-mark { grid-column: 1 / -1; display: grid; place-items: center; width: 2.25rem; height: 2.25rem; border-radius: .6rem; background: #e5f0e7; color: var(--accent); }
+.tile-version { display: block; margin-top: .2rem; color: var(--muted); font-size: .75rem; font-weight: 500; }
 .tile-arrow { color: var(--muted); }
 
 .panel { margin: 0 0 .75rem; padding: 1rem; border: 1px solid var(--line); border-radius: 1rem; background: #fff; }
