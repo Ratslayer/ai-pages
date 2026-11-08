@@ -21,9 +21,18 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out ai-pages-priva
 openssl pkey -in ai-pages-private.pem -pubout -outform DER | openssl base64 -A
 ```
 
-1. In **Ratslayer/calorie-watcher**, configure `AI_PAGES_SIGNING_KEY` with the private PEM and `AI_PAGES_PUBLISH_TOKEN` with a fine-grained token scoped to **Ratslayer/ai-pages** with **Contents: Read and write**. Run **Calorie Watcher page** on `main` once. The workflow creates the catalog at `feed/catalog.json`.
-2. On the phone, tap **Configure updates**, enter the base64 signing public key printed above, and leave **GitHub read token** blank. The public catalog works without a read token. If the catalog repository becomes private, enter a fine-grained token scoped to that repository with **Contents: Read-only**.
-3. Tap **Refresh tools**, then open **Calorie Watcher**. Later web releases use the same refresh button. The app verifies signatures, keeps a cached bundle for offline use, and offers **Restore previous bundle** after an update.
+Add these [Actions secrets in AI Pages](https://github.com/Ratslayer/ai-pages/settings/secrets/actions) once:
+
+| Secret | Value |
+| --- | --- |
+| `AI_PAGES_SIGNING_KEY` | The full RSA private PEM from the command above. Reuse the same key pair if the phone already trusts it. |
+| `AI_PAGES_SOURCE_TOKEN` | A fine-grained token for the private source repositories with **Contents: Read-only**. Select `Ratslayer/calorie-watcher` for the current catalog. |
+
+1. In [AI Pages Actions](https://github.com/Ratslayer/ai-pages/actions/workflows/publish-catalog.yml), run **Publish catalog** on `main`. It builds every registered page and writes the signed catalog to `feed/catalog.json` using its built-in GitHub token.
+2. On the phone, tap **Configure updates**, enter the base64 signing public key printed above, and leave **GitHub read token** blank. The public catalog works without a read token.
+3. Tap **Refresh tools**, then open **Calorie Watcher**. To publish a later page change, run **Publish catalog** again. The app verifies signatures, keeps a cached bundle for offline use, and offers **Restore previous bundle** after an update.
+
+Add new pages to [catalog-sources.json](catalog-sources.json). Each source repo uses Node 22 and emits `dist/index.html`, `dist/app.js`, and `dist/style.css` with `npm ci` and `npm run build`. Add a new private source to the read token's repository access. Public sources need only a list entry. The compiled pages are published in the public AI Pages catalog.
 
 To back up one tool, open it and tap **Backup**. Pick an on-device location or a cloud provider available in the Android file picker. **Restore** replaces that tool's local data. Treat the exported JSON as private. It includes entries and settings for the tool. It excludes sign-in credentials and photos. It does not sync devices.
 

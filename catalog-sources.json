@@ -1,0 +1,9 @@
+[
+  {
+    "id": "calorie-watcher",
+    "title": "Calorie Watcher",
+    "repository": "Ratslayer/calorie-watcher",
+    "ref": "main",
+    "private": true
+  }
+]
