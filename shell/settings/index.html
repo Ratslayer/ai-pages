@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Settings · AI Pages</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="app.js" defer></script>
+</head>
+<body>
+    <main class="page">
+        <header class="page-header">
+            <button type="button" class="back-button" data-action="openHome"><span aria-hidden="true">←</span> Home</button>
+        </header>
+        <h1>Settings</h1>
+        <p id="status" class="status" role="status">Loading settings…</p>
+        <section class="panel" aria-labelledby="chat-title">
+            <div class="panel-heading">
+                <h2 id="chat-title">ChatGPT</h2>
+                <span id="connection" class="badge" hidden></span>
+            </div>
+            <p>Connect your account to use your ChatGPT plan in tools.</p>
+            <div class="actions">
+                <button type="button" class="button primary" data-action="signIn" hidden>Continue with ChatGPT</button>
+                <button type="button" class="button" data-action="testConnection" hidden>Test connection</button>
+                <button type="button" class="button" data-action="disconnect" hidden>Disconnect</button>
+                <button type="button" class="button primary" data-action="pasteRedirect" hidden>Paste redirect URL</button>
+                <button type="button" class="button" data-action="stopSignIn" hidden>Stop sign-in</button>
+            </div>
+        </section>
+        <section class="panel" aria-labelledby="catalog-title">
+            <h2 id="catalog-title">Catalog</h2>
+            <p>Download updates for AI Pages and its tools.</p>
+            <div class="actions">
+                <button type="button" class="button primary" data-action="refresh" disabled>Refresh catalog</button>
+                <button type="button" class="button" data-action="importCatalog" disabled>Import signed catalog</button>
+                <button type="button" class="button" data-action="configureUpdates" disabled>Configure updates</button>
+            </div>
+        </section>
+    </main>
+</body>
+</html>

@@ -41,7 +41,9 @@ final class PageFeed {
     static final List<String> ASSETS = Arrays.asList("index.html", "app.js", "style.css");
 
     record Page(String id, String title, Map<String, String> files) {}
-    private record Catalog(String revision, Map<String, Page> pages) {}
+    record Catalog(String revision, Map<String, Page> pages, Page home, Page settings) {}
+
+    private static final Catalog EMPTY = new Catalog("", Collections.emptyMap(), null, null);
 
     private final Context context;
     private final SharedPreferences settings;
@@ -83,15 +85,15 @@ final class PageFeed {
         if (!changes.commit()) throw new IOException("Could not save the update settings.");
     }
 
-    synchronized Map<String, Page> cachedPages() throws Exception {
-        if (publicKey().isEmpty()) return Collections.emptyMap();
+    synchronized Catalog cachedCatalog() throws Exception {
+        if (publicKey().isEmpty()) return EMPTY;
         PublicKey key = trustedKey();
         try {
-            return verify(current.readFully(), key).pages();
+            return verify(current.readFully(), key);
         } catch (Exception ignored) {
-            if (previous.getBaseFile().exists()) return verify(previous.readFully(), key).pages();
+            if (previous.getBaseFile().exists()) return verify(previous.readFully(), key);
             if (current.getBaseFile().exists()) throw ignored;
-            return Collections.emptyMap();
+            return EMPTY;
         }
     }
 
@@ -233,12 +235,12 @@ final class PageFeed {
                 // The signing key may have changed. Only keep a verified previous catalog.
             }
             if (installed != null) {
-                if (installed.revision().equals(incoming.revision())) return "Tools are up to date.";
+                if (installed.revision().equals(incoming.revision())) return "Catalog is up to date.";
                 write(previous, old);
             }
         }
         write(current, data);
-        return "Updated " + incoming.pages().size() + " tool(s).";
+        return "Catalog updated.";
     }
 
     private Catalog verify(byte[] envelope, PublicKey key) throws Exception {
@@ -263,11 +265,22 @@ final class PageFeed {
                     || pages.containsKey(id)) {
                 throw new IOException("The tool catalog contains an invalid page.");
             }
-            Map<String, String> assets = new LinkedHashMap<>();
-            for (String asset : ASSETS) assets.put(asset, item.getJSONObject("files").getString(asset));
-            pages.put(id, new Page(id, title, assets));
+            pages.put(id, new Page(id, title, assets(item.getJSONObject("files"))));
         }
-        return new Catalog(catalog.getString("revision"), pages);
+        Page home = null;
+        Page settings = null;
+        if (catalog.has("shell")) {
+            JSONObject shell = catalog.getJSONObject("shell");
+            home = new Page("home", "Home", assets(shell.getJSONObject("home")));
+            settings = new Page("settings", "Settings", assets(shell.getJSONObject("settings")));
+        }
+        return new Catalog(catalog.getString("revision"), pages, home, settings);
+    }
+
+    private static Map<String, String> assets(JSONObject files) throws JSONException {
+        Map<String, String> assets = new LinkedHashMap<>();
+        for (String asset : ASSETS) assets.put(asset, files.getString(asset));
+        return assets;
     }
 
     static byte[] read(InputStream input, int max) throws IOException {

@@ -12,6 +12,7 @@ from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SOURCES = Path("catalog-sources.json")
+SHELL = Path("shell")
 PUBLIC_KEY_FILE = Path("app/src/main/assets/ai-pages-public.txt")
 ASSETS = ("index.html", "app.js", "style.css")
 MAX_SIZE = 900_000
@@ -45,22 +46,34 @@ def json_bytes(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
 
 
+def read_asset(file):
+    if not file.is_file() or file.is_symlink():
+        raise ValueError(f"Missing build output {file}.")
+    if file.stat().st_size > MAX_SIZE:
+        raise ValueError(f"Build output {file} exceeds the catalog size limit.")
+    return file.read_text(encoding="utf-8")
+
+
 def signed_catalog(entries, artifacts, key):
     pages = []
     for entry in entries:
-        files = {}
         directory = artifacts / f"page-{entry['id']}"
-        for name in ASSETS:
-            file = directory / name
-            if not file.is_file() or file.is_symlink():
-                raise ValueError(f"Missing build output {file}.")
-            if file.stat().st_size > MAX_SIZE:
-                raise ValueError(f"Build output {file} exceeds the catalog size limit.")
-            files[name] = file.read_text(encoding="utf-8")
+        files = {name: read_asset(directory / name) for name in ASSETS}
         pages.append({"id": entry["id"], "title": entry["title"], "files": files})
 
-    revision = hashlib.sha256(json_bytes(pages)).hexdigest()
-    payload = json_bytes({"bridgeVersion": 1, "revision": revision, "pages": pages})
+    bridge = read_asset(SHELL / "bridge.js")
+    style = read_asset(SHELL / "style.css")
+    shell = {
+        name: {
+            "index.html": read_asset(SHELL / name / "index.html"),
+            "app.js": bridge + "\n" + read_asset(SHELL / name / "app.js"),
+            "style.css": style,
+        }
+        for name in ("home", "settings")
+    }
+    catalog = {"bridgeVersion": 1, "pages": pages, "shell": shell}
+    revision = hashlib.sha256(json_bytes(catalog)).hexdigest()
+    payload = json_bytes({"revision": revision, **catalog})
     signature = subprocess.run(
         ["openssl", "dgst", "-sha256", "-sign", str(key)],
         input=payload, capture_output=True, check=True,
