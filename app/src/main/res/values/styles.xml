@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">AI Pages</string>
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowBackground">#F5F6EF</item>
+        <item name="android:colorAccent">#246145</item>
+    </style>
+</resources>
