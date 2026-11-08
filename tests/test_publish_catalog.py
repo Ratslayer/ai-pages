@@ -68,8 +68,10 @@ class CatalogPublicationTest(unittest.TestCase):
                 catalog = json.loads(payload)
                 self.assertEqual(catalog["bridgeVersion"], 1)
                 self.assertEqual([page["id"] for page in catalog["pages"]], [entry["id"] for entry in entries])
+                self.assertEqual([page["version"] for page in catalog["pages"]], [1, 1])
                 self.assertEqual(catalog["pages"][1]["files"]["app.js"], "second-tool/app.js")
                 self.assertEqual(set(catalog["shell"]), {"home", "settings"})
+                self.assertIn('const toolVersions = {"calorie-watcher":1,"second-tool":1};', catalog["shell"]["home"]["app.js"])
                 for screen in catalog["shell"].values():
                     self.assertEqual(set(screen), set(publish_catalog.ASSETS))
                     self.assertIn("window.AiPages", screen["app.js"])
@@ -89,15 +91,24 @@ class CatalogPublicationTest(unittest.TestCase):
                 self.assertEqual(updated["pages"], catalog["pages"])
                 self.assertIn("<!-- new layout -->", updated["shell"]["home"]["index.html"])
 
+                (directory / "page-second-tool" / "app.js").write_text("updated tool", encoding="utf-8")
+                publish_catalog.publish(entries, directory)
+                publish_catalog.publish(entries, directory)
+                self.assertEqual(len(writes), 3)
+                envelope = json.loads(base64.b64decode(writes[2]["content"]))
+                updated = json.loads(base64.b64decode(envelope["payload"]))
+                self.assertEqual([page["version"] for page in updated["pages"]], [1, 2])
+                self.assertIn('const toolVersions = {"calorie-watcher":1,"second-tool":2};', updated["shell"]["home"]["app.js"])
+
                 (directory / "page-second-tool" / "app.js").unlink()
                 with self.assertRaisesRegex(ValueError, "Missing build output"):
                     publish_catalog.publish(entries, directory)
-                self.assertEqual(len(writes), 2)
+                self.assertEqual(len(writes), 3)
 
                 publish_catalog.publish(entries[:1], directory)
-                self.assertEqual(writes[2]["sha"], "expected-file-sha")
+                self.assertEqual(writes[3]["sha"], "expected-file-sha")
 
                 public_file.write_bytes(base64.b64encode(public_der[:-1] + b"\x00"))
                 with self.assertRaisesRegex(ValueError, "does not match the public key"):
                     publish_catalog.publish(entries[:1], directory)
-                self.assertEqual(len(writes), 3)
+                self.assertEqual(len(writes), 4)

@@ -23,6 +23,13 @@ bridge("home.services").then((services) => {
 
         const label = document.createElement("span");
         label.textContent = title;
+        const version = toolVersions[id];
+        if (Number.isInteger(version)) {
+            const versionLabel = document.createElement("small");
+            versionLabel.className = "tile-version";
+            versionLabel.textContent = `v${version}`;
+            label.append(versionLabel);
+        }
         const arrow = document.createElement("span");
         arrow.className = "tile-arrow";
         arrow.setAttribute("aria-hidden", "true");

@@ -54,23 +54,44 @@ def read_asset(file):
     return file.read_text(encoding="utf-8")
 
 
-def signed_catalog(entries, artifacts, key):
+def published_pages(envelope):
+    if not envelope:
+        return {}
+    try:
+        catalog = json.loads(base64.b64decode(json.loads(envelope)["payload"], validate=True))
+        return {page["id"]: page for page in catalog["pages"]}
+    except (KeyError, TypeError, ValueError):
+        return {}
+
+
+def signed_catalog(entries, artifacts, key, previous_pages):
     pages = []
     for entry in entries:
-        directory = artifacts / f"page-{entry['id']}"
+        tool_id = entry["id"]
+        directory = artifacts / f"page-{tool_id}"
         files = {name: read_asset(directory / name) for name in ASSETS}
-        pages.append({"id": entry["id"], "title": entry["title"], "files": files})
+        previous = previous_pages.get(tool_id, {})
+        version = previous.get("version")
+        if type(version) is not int or version < 1:
+            version = 1
+        elif files != previous.get("files"):
+            version += 1
+        pages.append({"id": tool_id, "title": entry["title"], "version": version, "files": files})
 
     bridge = read_asset(SHELL / "bridge.js")
     style = read_asset(SHELL / "style.css")
-    shell = {
-        name: {
+    versions = {page["id"]: page["version"] for page in pages}
+    shell = {}
+    for name in ("home", "settings"):
+        script = bridge + "\n"
+        if name == "home":
+            # The Android bridge already lists tool IDs, so Home can display versions on existing APKs.
+            script += f"const toolVersions = {json_bytes(versions).decode()};\n"
+        shell[name] = {
             "index.html": read_asset(SHELL / name / "index.html"),
-            "app.js": bridge + "\n" + read_asset(SHELL / name / "app.js"),
+            "app.js": script + read_asset(SHELL / name / "app.js"),
             "style.css": style,
         }
-        for name in ("home", "settings")
-    }
     catalog = {"bridgeVersion": 1, "pages": pages, "shell": shell}
     revision = hashlib.sha256(json_bytes(catalog)).hexdigest()
     payload = json_bytes({"revision": revision, **catalog})
@@ -113,6 +134,14 @@ def publish(entries, artifacts):
     private_key = os.environ.get("AI_PAGES_SIGNING_KEY", "").strip()
     if not private_key:
         raise ValueError("Set the AI_PAGES_SIGNING_KEY Actions secret in AI Pages.")
+    try:
+        existing = github("GET")
+    except HTTPError as error:
+        if error.code != 404:
+            raise
+        existing = None
+    previous_envelope = base64.b64decode(existing["content"]) if existing else b""
+
     with tempfile.TemporaryDirectory() as directory:
         key = Path(directory) / "private.pem"
         key.touch(mode=0o600)
@@ -124,15 +153,9 @@ def publish(entries, artifacts):
         ).stdout
         if actual != expected:
             raise ValueError("AI_PAGES_SIGNING_KEY does not match the public key committed to AI Pages.")
-        revision, envelope = signed_catalog(entries, artifacts, key)
+        revision, envelope = signed_catalog(entries, artifacts, key, published_pages(previous_envelope))
 
-    try:
-        existing = github("GET")
-    except HTTPError as error:
-        if error.code != 404:
-            raise
-        existing = None
-    if existing and base64.b64decode(existing["content"]) == envelope:
+    if previous_envelope == envelope:
         print("The catalog is already up to date.")
         return
     body = {
