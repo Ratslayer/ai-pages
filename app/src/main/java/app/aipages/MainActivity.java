@@ -16,8 +16,11 @@ import android.os.Bundle;
 import android.provider.MediaStore;
 import android.text.InputFilter;
 import android.text.InputType;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.RenderProcessGoneDetail;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
@@ -36,6 +39,7 @@ import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
@@ -59,6 +63,7 @@ public final class MainActivity extends ComponentActivity {
     private static final String SIGN_IN_ACTION_ID = "app.aipages.SIGN_IN_ACTION_ID";
     private static final String CSP = "default-src 'none'; script-src 'self'; style-src 'self'; "
             + "base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
+    private enum Route { HOME, SETTINGS, RECOVERY, TOOL }
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final ExecutorService authWorker = Executors.newSingleThreadExecutor();
@@ -70,17 +75,18 @@ public final class MainActivity extends ComponentActivity {
     private boolean signingIn;
     private boolean updating;
     private String status = "";
-    private ToolScreen tool;
+    private Route route = Route.HOME;
+    private WebScreen activePage;
     private File cameraFile;
-    private final OnBackPressedCallback backToTools = new OnBackPressedCallback(false) {
+    private final OnBackPressedCallback backToHome = new OnBackPressedCallback(false) {
         @Override public void handleOnBackPressed() {
-            if (tool != null && !tool.busy) showHome();
+            if (activePage == null || !activePage.busy) showHome();
         }
     };
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
-        getOnBackPressedDispatcher().addCallback(this, backToTools);
+        getOnBackPressedDispatcher().addCallback(this, backToHome);
         if (android.os.Build.VERSION.SDK_INT >= 35) {
             getWindow().getDecorView().setOnApplyWindowInsetsListener((view, insets) -> {
                 android.graphics.Insets padding = insets.getInsets(android.view.WindowInsets.Type.systemBars());
@@ -96,8 +102,8 @@ public final class MainActivity extends ComponentActivity {
             setIntent(new Intent(this, MainActivity.class));
             status = "This sign-in attempt ended. Start sign-in again.";
         }
-        showHome();
-        if (feed.publicKey().isEmpty()) {
+        PageFeed.Catalog catalog = renderLauncher();
+        if ((catalog == null || catalog.home() == null) && !feed.hasKeyWarning()) {
             update(feed::refresh);
         } else {
             worker.execute(() -> {
@@ -105,7 +111,7 @@ public final class MainActivity extends ComponentActivity {
                     feed.checkSigningKey();
                 } catch (CatalogKey.Changed changed) {
                     runOnUiThread(() -> {
-                        if (!isDestroyed() && tool == null && !updating) showHome();
+                        if (!isDestroyed() && !updating) renderLauncher();
                     });
                 } catch (Exception ignored) {
                     // Cached tools stay available offline. Refresh reports network errors.
@@ -115,14 +121,42 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private void showHome() {
-        if (tool != null) {
-            destroyTool();
+        route = Route.HOME;
+        renderLauncher();
+    }
+
+    private void showRecovery() {
+        route = Route.RECOVERY;
+        renderLauncher();
+    }
+
+    private PageFeed.Catalog renderLauncher() {
+        if (route == Route.TOOL) return null;
+        if (activePage != null) destroyPage();
+        backToHome.setEnabled(route != Route.HOME);
+        PageFeed.Catalog catalog = null;
+        try {
+            catalog = feed.cachedCatalog();
+        } catch (Exception ignored) {
+            // Keep the native update controls available if the cache cannot be read.
         }
+        if (catalog != null && route != Route.RECOVERY && !feed.hasKeyWarning()) {
+            PageFeed.Page page = route == Route.HOME ? catalog.home() : catalog.settings();
+            if (page != null && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                openPage(page, route, catalog);
+                return catalog;
+            }
+        }
+        renderRecovery(catalog);
+        return catalog;
+    }
+
+    private void renderRecovery(PageFeed.Catalog catalog) {
         ScrollView scroll = new ScrollView(this);
         LinearLayout body = column();
         scroll.addView(body);
         TextView title = new TextView(this);
-        title.setText("AI Pages");
+        title.setText("AI Pages recovery");
         title.setTextSize(30);
         body.addView(title);
         if (feed.hasKeyWarning()) {
@@ -142,55 +176,50 @@ public final class MainActivity extends ComponentActivity {
         message.setText(status);
         message.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         body.addView(message);
+        if (route == Route.RECOVERY && catalog != null && catalog.home() != null && !feed.hasKeyWarning()) {
+            addButton(body, "Open Home", this::showHome);
+        }
         if (pendingSignIn != null) {
             addButton(body, "Paste redirect URL", this::pasteRedirect);
             addButton(body, "Stop sign-in", () -> close(pendingSignIn));
         } else if (!signingIn) {
             if (chat.connected()) {
-                addButton(body, "Test ChatGPT connection", () -> update(() ->
-                        "ChatGPT replied: " + chat.run("Reply with the single word Connected.", null)));
-                addButton(body, "Disconnect ChatGPT", () -> update(() -> {
-                    chat.disconnect();
-                    return "ChatGPT disconnected on this phone.";
-                }));
+                addButton(body, "Test ChatGPT connection", this::testChatConnection).setEnabled(!updating);
+                addButton(body, "Disconnect ChatGPT", this::disconnectChat).setEnabled(!updating);
             } else {
-                addButton(body, "Continue with ChatGPT", this::beginSignIn);
+                addButton(body, "Continue with ChatGPT", this::beginSignIn).setEnabled(!updating);
             }
         }
-        addButton(body, "Configure updates", () -> { if (!updating) configureFeed(); });
-        addButton(body, updating ? "Working…" : "Refresh tools", () -> update(feed::refresh)).setEnabled(!updating);
+        boolean canUpdate = !updating && !signingIn;
+        addButton(body, "Configure updates", this::configureFeed).setEnabled(canUpdate);
+        addButton(body, updating ? "Working…" : "Refresh catalog", () -> update(feed::refresh)).setEnabled(canUpdate);
         addButton(body, "Import signed catalog", this::chooseCatalog)
-                .setEnabled(!updating && !feed.hasKeyWarning());
+                .setEnabled(canUpdate && !feed.hasKeyWarning());
         if (feed.hasPrevious()) {
             addButton(body, "Restore previous bundle", () -> update(() -> {
                 feed.restorePrevious();
                 return "Restored the previous bundle.";
-            }));
+            })).setEnabled(canUpdate);
         }
-        try {
-            Map<String, PageFeed.Page> pages = feed.cachedPages();
-            if (pages.isEmpty()) {
-                TextView empty = new TextView(this);
-                empty.setText("Tap Refresh tools to download the catalog.");
-                body.addView(empty);
+        if (catalog == null || catalog.home() == null) {
+            TextView help = new TextView(this);
+            help.setText(catalog == null ? "Could not open the cached catalog. Check the signing key and refresh."
+                    : "Refresh the catalog to download Home and Settings.");
+            body.addView(help);
+        }
+        if (catalog != null) {
+            for (PageFeed.Page page : catalog.pages().values()) {
+                addButton(body, page.title(), () -> openTool(page)).setEnabled(!signingIn);
             }
-            for (PageFeed.Page page : pages.values()) {
-                addButton(body, page.title(), () -> openTool(page)).setEnabled(!updating && !signingIn);
-            }
-        } catch (Exception e) {
-            TextView problem = new TextView(this);
-            problem.setText("Could not open the cached catalog. Check the signing key and refresh.");
-            body.addView(problem);
         }
         setContentView(scroll);
     }
 
-    private void destroyTool() {
-        WebView view = tool.view;
+    private void destroyPage() {
+        WebView view = activePage.view;
         if (view.getParent() instanceof ViewGroup parent) parent.removeView(view);
         view.destroy();
-        tool = null;
-        backToTools.setEnabled(false);
+        activePage = null;
     }
 
     private void chooseCatalog() {
@@ -217,15 +246,16 @@ public final class MainActivity extends ComponentActivity {
                     token.setText("");
                     update(() -> {
                         feed.configure(credential, publicKey);
-                        return "Update settings saved. Tap Refresh tools.";
+                        return "Update settings saved. Refresh the catalog.";
                     });
                 }).show();
     }
 
     private void beginSignIn() {
+        if (signingIn || updating) return;
         signingIn = true;
         status = "Opening ChatGPT sign-in…";
-        showHome();
+        renderLauncher();
         authWorker.execute(() -> {
             try (ChatGpt.SignIn attempt = chat.beginSignIn()) {
                 runOnUiThread(() -> {
@@ -235,7 +265,7 @@ public final class MainActivity extends ComponentActivity {
                     }
                     pendingSignIn = attempt;
                     status = "If the browser times out at 127.0.0.1, tap the Finish sign-in checkmark in the browser.";
-                    showHome();
+                    renderLauncher();
                     try {
                         new CustomTabsIntent.Builder().setShareState(CustomTabsIntent.SHARE_STATE_OFF)
                                 .setActionButton(finishSignInIcon(), "Finish sign-in", createFinishSignInAction(), true)
@@ -249,7 +279,7 @@ public final class MainActivity extends ComponentActivity {
                     pendingSignIn = null;
                     clearFinishSignInAction();
                     status = "Browser response received. Connecting to OpenAI…";
-                    showHome();
+                    renderLauncher();
                 }));
                 finishSignIn("Connected. Tools can use your ChatGPT plan.");
             } catch (Exception e) {
@@ -303,7 +333,7 @@ public final class MainActivity extends ComponentActivity {
             status = "The browser did not send the current sign-in redirect. Return to the browser and tap the "
                     + "checkmark at 127.0.0.1, or use Paste redirect URL.";
         }
-        showHome();
+        renderLauncher();
     }
 
     private void pasteRedirect() {
@@ -330,20 +360,41 @@ public final class MainActivity extends ComponentActivity {
             clearFinishSignInAction();
             signingIn = false;
             status = result;
-            showHome();
+            renderLauncher();
         });
     }
 
-    @SuppressWarnings("SetJavaScriptEnabled")
+    private void testChatConnection() {
+        new AlertDialog.Builder(this).setTitle("Test ChatGPT connection?")
+                .setMessage("AI Pages will send a short test prompt using your ChatGPT plan.")
+                .setNegativeButton("Cancel", null).setPositiveButton("Send", (dialog, button) -> update(() ->
+                        "ChatGPT replied: " + chat.run("Reply with the single word Connected.", null))).show();
+    }
+
+    private void disconnectChat() {
+        new AlertDialog.Builder(this).setTitle("Disconnect ChatGPT?")
+                .setNegativeButton("Cancel", null).setPositiveButton("Disconnect", (dialog, button) -> update(() -> {
+                    chat.disconnect();
+                    return "ChatGPT disconnected on this phone.";
+                })).show();
+    }
+
     private void openTool(PageFeed.Page page) {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             status = "Update Android System WebView to open tools.";
-            showHome();
+            renderLauncher();
             return;
         }
-        ToolScreen screen = new ToolScreen(page);
-        tool = screen;
-        backToTools.setEnabled(true);
+        openPage(page, Route.TOOL, null);
+    }
+
+    @SuppressWarnings("SetJavaScriptEnabled")
+    private void openPage(PageFeed.Page page, Route destination, PageFeed.Catalog catalog) {
+        if (activePage != null) destroyPage();
+        route = destination;
+        WebScreen screen = new WebScreen(page, destination, catalog);
+        activePage = screen;
+        backToHome.setEnabled(destination != Route.HOME);
         WebView view = screen.view;
         view.getSettings().setJavaScriptEnabled(true);
         view.getSettings().setAllowFileAccess(false);
@@ -379,32 +430,56 @@ public final class MainActivity extends ComponentActivity {
                 return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden",
                         Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
             }
+
+            @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (destination != Route.TOOL && request.isForMainFrame() && activePage == screen) {
+                    status = "Could not open " + page.title() + ".";
+                    showRecovery();
+                }
+            }
+
+            @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                if (activePage == screen) {
+                    status = "The page stopped responding. Try opening it again or restore the previous catalog.";
+                    showRecovery();
+                }
+                return true;
+            }
         });
         WebViewCompat.addWebMessageListener(view, "AiPages", Collections.singleton(screen.origin),
                 (webView, message, origin, main, reply) -> {
-                    if (main && screen.origin.equals(origin.toString()) && tool == screen) {
+                    if (main && screen.origin.equals(origin.toString()) && activePage == screen) {
                         onBridgeMessage(screen, message.getData(), reply);
                     }
                 });
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         LinearLayout bar = new LinearLayout(this);
-        addButton(bar, "Tools", () -> { if (!screen.busy) showHome(); });
-        addButton(bar, "Backup", () -> backup(screen));
-        addButton(bar, "Restore", () -> restore(screen));
+        if (destination == Route.TOOL) {
+            addButton(bar, "Tools", () -> { if (!screen.busy) showHome(); });
+            addButton(bar, "Backup", () -> backup(screen));
+            addButton(bar, "Restore", () -> restore(screen));
+        } else {
+            bar.setGravity(Gravity.END);
+            addButton(bar, "Recovery", this::showRecovery);
+        }
         layout.addView(bar);
         layout.addView(view, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(layout);
         view.loadUrl(screen.origin + "/index.html");
     }
 
-    private void onBridgeMessage(ToolScreen screen, String data, JavaScriptReplyProxy proxy) {
+    private void onBridgeMessage(WebScreen screen, String data, JavaScriptReplyProxy proxy) {
         if (data == null || data.length() > 6 * MAX_DATA + 10_000) return;
         String id = "";
         try {
             JSONObject request = new JSONObject(data);
             id = request.getString("id");
             if (!id.matches("[0-9]{1,12}")) return;
+            if (screen.route != Route.TOOL) {
+                onLauncherMessage(screen, request, proxy, id);
+                return;
+            }
             switch (request.getString("method")) {
                 case "storage.read" -> reply(proxy, id, screen.data.getString("state", null), null);
                 case "storage.write" -> {
@@ -419,7 +494,7 @@ public final class MainActivity extends ComponentActivity {
                 }
                 case "ai.run" -> {
                     if (screen.busy) throw new IOException("Finish the current action first.");
-                    if (!chat.connected()) throw new IOException("Connect ChatGPT from the Tools screen first.");
+                    if (!chat.connected()) throw new IOException("Connect ChatGPT in AI Pages Settings first.");
                     String prompt = request.getString("prompt");
                     if (prompt.trim().isEmpty() || prompt.length() > 8_000) throw new IOException("Invalid prompt.");
                     byte[] photo = request.optBoolean("image") ? screen.photo : null;
@@ -429,11 +504,81 @@ public final class MainActivity extends ComponentActivity {
                 default -> throw new IOException("Unsupported tool action.");
             }
         } catch (Exception e) {
-            reply(proxy, id, null, message(e, "Could not complete the tool action."));
+            reply(proxy, id, null, message(e, "Could not complete the action."));
         }
     }
 
-    private void confirmRun(ToolScreen screen, JavaScriptReplyProxy proxy, String id, String prompt, byte[] photo) {
+    private void onLauncherMessage(WebScreen screen, JSONObject request, JavaScriptReplyProxy proxy, String id)
+            throws Exception {
+        String method = request.getString("method");
+        if (screen.route == Route.HOME) {
+            switch (method) {
+                case "home.services" -> {
+                    JSONArray services = new JSONArray();
+                    for (PageFeed.Page page : screen.catalog.pages().values()) {
+                        services.put(new JSONObject().put("id", page.id()).put("title", page.title()));
+                    }
+                    reply(proxy, id, services, null);
+                }
+                case "home.openTool" -> {
+                    if (signingIn) throw new IOException("Finish connecting ChatGPT in Settings first.");
+                    PageFeed.Page page = screen.catalog.pages().get(request.getString("serviceId"));
+                    if (page == null) throw new IOException("This tool is not in the downloaded catalog.");
+                    reply(proxy, id, true, null);
+                    openTool(page);
+                }
+                case "home.openSettings" -> {
+                    reply(proxy, id, true, null);
+                    route = Route.SETTINGS;
+                    renderLauncher();
+                }
+                default -> throw new IOException("Unsupported Home action.");
+            }
+            return;
+        }
+
+        if ("settings.state".equals(method)) {
+            JSONObject state = new JSONObject().put("connected", chat.connected()).put("signingIn", signingIn)
+                    .put("canFinishSignIn", pendingSignIn != null).put("updating", updating).put("status", status);
+            reply(proxy, id, state, null);
+            return;
+        }
+        if ("settings.openHome".equals(method)) {
+            reply(proxy, id, true, null);
+            showHome();
+            return;
+        }
+        if ("settings.pasteRedirect".equals(method) || "settings.stopSignIn".equals(method)) {
+            if (pendingSignIn == null) throw new IOException("There is no sign-in attempt to finish.");
+            if ("settings.pasteRedirect".equals(method)) pasteRedirect();
+            else close(pendingSignIn);
+            reply(proxy, id, true, null);
+            return;
+        }
+        if (updating || signingIn) throw new IOException("Finish the current action first.");
+
+        switch (method) {
+            case "settings.signIn" -> {
+                if (chat.connected()) throw new IOException("ChatGPT is already connected.");
+                reply(proxy, id, true, null);
+                beginSignIn();
+                return;
+            }
+            case "settings.testConnection" -> testChatConnection();
+            case "settings.disconnect" -> disconnectChat();
+            case "settings.refresh" -> {
+                reply(proxy, id, true, null);
+                update(feed::refresh);
+                return;
+            }
+            case "settings.importCatalog" -> chooseCatalog();
+            case "settings.configureUpdates" -> configureFeed();
+            default -> throw new IOException("Unsupported Settings action.");
+        }
+        reply(proxy, id, true, null);
+    }
+
+    private void confirmRun(WebScreen screen, JavaScriptReplyProxy proxy, String id, String prompt, byte[] photo) {
         screen.busy = true;
         Runnable cancel = () -> {
             screen.busy = false;
@@ -452,7 +597,7 @@ public final class MainActivity extends ComponentActivity {
                 })).show();
     }
 
-    private void pickPhoto(ToolScreen screen, JavaScriptReplyProxy proxy, String id) {
+    private void pickPhoto(WebScreen screen, JavaScriptReplyProxy proxy, String id) {
         screen.busy = true;
         screen.photoReply = proxy;
         screen.photoId = id;
@@ -492,7 +637,7 @@ public final class MainActivity extends ComponentActivity {
             }
             return;
         }
-        ToolScreen screen = tool;
+        WebScreen screen = route == Route.TOOL ? activePage : null;
         if (request == PICK_PHOTO || request == TAKE_PHOTO) {
             if (screen == null || result != RESULT_OK || (uri == null && request == PICK_PHOTO)
                     || (cameraFile == null && request == TAKE_PHOTO)) {
@@ -524,13 +669,13 @@ public final class MainActivity extends ComponentActivity {
         }
     }
 
-    private void backup(ToolScreen screen) {
+    private void backup(WebScreen screen) {
         if (screen.busy) return;
         chooseBackup(screen, document(Intent.ACTION_CREATE_DOCUMENT, "application/json")
                 .putExtra(Intent.EXTRA_TITLE, screen.page.id() + "-backup.json"), EXPORT);
     }
 
-    private void restore(ToolScreen screen) {
+    private void restore(WebScreen screen) {
         if (screen.busy) return;
         new AlertDialog.Builder(this).setTitle("Replace this tool’s local data?")
                 .setMessage("Restoring a backup replaces the current data for " + screen.page.title() + ".")
@@ -538,7 +683,7 @@ public final class MainActivity extends ComponentActivity {
                         chooseBackup(screen, document(Intent.ACTION_OPEN_DOCUMENT, "application/json"), IMPORT)).show();
     }
 
-    private void chooseBackup(ToolScreen screen, Intent intent, int request) {
+    private void chooseBackup(WebScreen screen, Intent intent, int request) {
         try {
             screen.busy = true;
             startActivityForResult(intent, request);
@@ -548,7 +693,7 @@ public final class MainActivity extends ComponentActivity {
         }
     }
 
-    private void transfer(ToolScreen screen, int request, Uri uri) {
+    private void transfer(WebScreen screen, int request, Uri uri) {
         String result;
         try {
             if (request == EXPORT) {
@@ -575,17 +720,16 @@ public final class MainActivity extends ComponentActivity {
         }
         String notification = result;
         runOnUiThread(() -> {
-            if (isDestroyed() || tool != screen) return;
+            if (isDestroyed() || activePage != screen) return;
             screen.busy = false;
             if (request == IMPORT && "Backup restored.".equals(notification)) {
-                showHome();
                 openTool(screen.page);
             }
             toast(notification);
         });
     }
 
-    private static void saveState(ToolScreen screen, String state) throws Exception {
+    private static void saveState(WebScreen screen, String state) throws Exception {
         if (state.getBytes(StandardCharsets.UTF_8).length > MAX_DATA) throw new IOException("Tool storage limit reached.");
         JSONObject value = new JSONObject(state);
         if (!screen.data.edit().putString("state", value.toString()).commit()) {
@@ -593,15 +737,15 @@ public final class MainActivity extends ComponentActivity {
         }
     }
 
-    private void finishPhoto(ToolScreen screen, boolean selected, String error) {
+    private void finishPhoto(WebScreen screen, boolean selected, String error) {
         JavaScriptReplyProxy proxy = screen.photoReply;
         screen.photoReply = null;
         if (proxy != null) complete(screen, proxy, screen.photoId, selected, error);
     }
 
-    private void complete(ToolScreen screen, JavaScriptReplyProxy proxy, String id, Object value, String error) {
+    private void complete(WebScreen screen, JavaScriptReplyProxy proxy, String id, Object value, String error) {
         screen.busy = false;
-        if (!isDestroyed() && tool == screen) reply(proxy, id, value, error);
+        if (!isDestroyed() && activePage == screen) reply(proxy, id, value, error);
     }
 
     private static void reply(JavaScriptReplyProxy proxy, String id, Object value, String error) {
@@ -652,7 +796,8 @@ public final class MainActivity extends ComponentActivity {
     private void update(Work work) {
         if (updating) return;
         updating = true;
-        showHome();
+        status = "Working…";
+        renderLauncher();
         worker.execute(() -> {
             String result;
             try {
@@ -665,7 +810,7 @@ public final class MainActivity extends ComponentActivity {
                 if (isDestroyed()) return;
                 updating = false;
                 status = done;
-                showHome();
+                renderLauncher();
             });
         });
     }
@@ -714,15 +859,17 @@ public final class MainActivity extends ComponentActivity {
     @Override protected void onDestroy() {
         clearFinishSignInAction();
         close(pendingSignIn);
-        if (tool != null) destroyTool();
+        if (activePage != null) destroyPage();
         deleteCameraFile();
         authWorker.shutdownNow();
         worker.shutdownNow();
         super.onDestroy();
     }
 
-    private final class ToolScreen {
+    private final class WebScreen {
         final PageFeed.Page page;
+        final Route route;
+        final PageFeed.Catalog catalog;
         final WebView view = new WebView(MainActivity.this);
         final SharedPreferences data;
         final String host;
@@ -732,10 +879,12 @@ public final class MainActivity extends ComponentActivity {
         JavaScriptReplyProxy photoReply;
         String photoId;
 
-        ToolScreen(PageFeed.Page page) {
+        WebScreen(PageFeed.Page page, Route route, PageFeed.Catalog catalog) {
             this.page = page;
-            data = getSharedPreferences("tool-" + page.id(), MODE_PRIVATE);
-            host = page.id() + ".ai-pages.invalid";
+            this.route = route;
+            this.catalog = catalog;
+            data = route == Route.TOOL ? getSharedPreferences("tool-" + page.id(), MODE_PRIVATE) : null;
+            host = page.id() + (route == Route.TOOL ? ".ai-pages.invalid" : ".shell.ai-pages.invalid");
             origin = "https://" + host;
         }
     }

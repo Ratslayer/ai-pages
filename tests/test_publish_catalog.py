@@ -2,6 +2,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -28,6 +29,7 @@ class CatalogPublicationTest(unittest.TestCase):
                 check=True, capture_output=True,
             ).stdout
             public_file.write_bytes(base64.b64encode(public_der))
+            shell = Path(shutil.copytree(publish_catalog.SHELL, directory / "shell"))
             entries = [
                 {"id": "calorie-watcher", "title": "Calorie Watcher"},
                 {"id": "second-tool", "title": "Second Tool"},
@@ -51,9 +53,12 @@ class CatalogPublicationTest(unittest.TestCase):
                 writes.append(body)
                 existing = {"content": body["content"], "sha": "expected-file-sha"}
 
-            with patch.object(publish_catalog, "github", side_effect=github), patch.object(
-                publish_catalog, "PUBLIC_KEY_FILE", public_file
-            ), patch.dict(os.environ, {"AI_PAGES_SIGNING_KEY": key.read_text(encoding="utf-8")}):
+            with (
+                patch.object(publish_catalog, "github", side_effect=github),
+                patch.object(publish_catalog, "PUBLIC_KEY_FILE", public_file),
+                patch.object(publish_catalog, "SHELL", shell),
+                patch.dict(os.environ, {"AI_PAGES_SIGNING_KEY": key.read_text(encoding="utf-8")}),
+            ):
                 publish_catalog.publish(entries, directory)
                 publish_catalog.publish(entries, directory)
                 self.assertEqual(len(writes), 1)
@@ -64,21 +69,35 @@ class CatalogPublicationTest(unittest.TestCase):
                 self.assertEqual(catalog["bridgeVersion"], 1)
                 self.assertEqual([page["id"] for page in catalog["pages"]], [entry["id"] for entry in entries])
                 self.assertEqual(catalog["pages"][1]["files"]["app.js"], "second-tool/app.js")
+                self.assertEqual(set(catalog["shell"]), {"home", "settings"})
+                for screen in catalog["shell"].values():
+                    self.assertEqual(set(screen), set(publish_catalog.ASSETS))
+                    self.assertIn("window.AiPages", screen["app.js"])
                 signature = directory / "signature"
                 signature.write_bytes(base64.b64decode(envelope["signature"]))
                 verify = ["openssl", "dgst", "-sha256", "-verify", str(public_key), "-signature", str(signature)]
                 subprocess.run(verify, input=payload, check=True, capture_output=True)
                 self.assertNotEqual(subprocess.run(verify, input=payload + b" ", capture_output=True).returncode, 0)
 
+                with (shell / "home" / "index.html").open("a", encoding="utf-8") as home:
+                    home.write("<!-- new layout -->")
+                publish_catalog.publish(entries, directory)
+                self.assertEqual(len(writes), 2)
+                updated = json.loads(base64.b64decode(writes[1]["content"]))
+                updated = json.loads(base64.b64decode(updated["payload"]))
+                self.assertNotEqual(updated["revision"], catalog["revision"])
+                self.assertEqual(updated["pages"], catalog["pages"])
+                self.assertIn("<!-- new layout -->", updated["shell"]["home"]["index.html"])
+
                 (directory / "page-second-tool" / "app.js").unlink()
                 with self.assertRaisesRegex(ValueError, "Missing build output"):
                     publish_catalog.publish(entries, directory)
-                self.assertEqual(len(writes), 1)
+                self.assertEqual(len(writes), 2)
 
                 publish_catalog.publish(entries[:1], directory)
-                self.assertEqual(writes[1]["sha"], "expected-file-sha")
+                self.assertEqual(writes[2]["sha"], "expected-file-sha")
 
                 public_file.write_bytes(base64.b64encode(public_der[:-1] + b"\x00"))
                 with self.assertRaisesRegex(ValueError, "does not match the public key"):
                     publish_catalog.publish(entries[:1], directory)
-                self.assertEqual(len(writes), 2)
+                self.assertEqual(len(writes), 3)
