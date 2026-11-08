@@ -28,7 +28,9 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.net.ssl.HttpsURLConnection;
 
 final class PageFeed {
-    private static final String CONTENTS = "https://api.github.com/repos/Ratslayer/ai-pages/contents/";
+    private static final String PUBLIC_CONTENTS =
+            "https://raw.githubusercontent.com/Ratslayer/ai-pages/refs/heads/main/";
+    private static final String API_CONTENTS = "https://api.github.com/repos/Ratslayer/ai-pages/contents/";
     private static final String CATALOG_PATH = "feed/catalog.json";
     private static final String KEY_FILE = "ai-pages-public.txt";
     private static final String KEY_PATH = "app/src/main/assets/" + KEY_FILE;
@@ -145,14 +147,26 @@ final class PageFeed {
     }
 
     private static byte[] download(String path, String bearer, int max) throws IOException {
-        HttpsURLConnection connection = (HttpsURLConnection) new URL(CONTENTS + path + "?ref=main").openConnection();
+        String endpoint = bearer == null ? PUBLIC_CONTENTS + path : API_CONTENTS + path + "?ref=main";
+        HttpsURLConnection connection = (HttpsURLConnection) new URL(endpoint).openConnection();
         connection.setInstanceFollowRedirects(false);
         connection.setConnectTimeout(15_000);
         connection.setReadTimeout(15_000);
-        if (bearer != null) connection.setRequestProperty("Authorization", "Bearer " + bearer);
-        connection.setRequestProperty("Accept", "application/vnd.github.raw+json");
+        connection.setRequestProperty("User-Agent", "AI-Pages");
+        if (bearer != null) {
+            connection.setRequestProperty("Authorization", "Bearer " + bearer);
+            connection.setRequestProperty("Accept", "application/vnd.github.raw+json");
+        }
         try {
             int status = connection.getResponseCode();
+            if (status == 429 || (status == 403 && ("0".equals(connection.getHeaderField("X-RateLimit-Remaining"))
+                    || connection.getHeaderField("Retry-After") != null))) {
+                throw new IOException("GitHub download rate limit reached. Try refreshing again later.");
+            }
+            if (bearer != null && (status == 401 || status == 403)) {
+                throw new IOException("GitHub denied the saved read token. Check it or clear it in Configure updates "
+                        + "to use the public catalog.");
+            }
             if (status == 404 && CATALOG_PATH.equals(path)) {
                 throw new IOException("Catalog not found. Check that the page workflow published it.");
             }
