@@ -1,6 +1,6 @@
 # AI Pages
 
-One Android shell for private HTML and TypeScript tools. AI Pages owns ChatGPT sign-in, photo selection, tool data, and backup and restore. Tool updates are fetched separately from the APK.
+One Android shell for HTML and TypeScript tools. AI Pages owns ChatGPT sign-in, photo selection, tool data, and backup and restore. Tool updates are fetched separately from the APK.
 
 ## Install and check sign-in
 
@@ -11,7 +11,7 @@ One Android shell for private HTML and TypeScript tools. AI Pages owns ChatGPT s
 
 This uses OpenAI's [Sign in with ChatGPT for local clients](https://developers.openai.com/siwc/token-sharing-open-source). The app has no API-key configuration. Credentials are encrypted with an Android Keystore key.
 
-## Set up the private tool feed
+## Set up the tool feed
 
 Generate a signing key on a trusted machine:
 
@@ -22,7 +22,7 @@ openssl pkey -in ai-pages-private.pem -pubout -outform DER | openssl base64 -A
 ```
 
 1. In **Ratslayer/calorie-watcher**, configure `AI_PAGES_SIGNING_KEY` with the private PEM and `AI_PAGES_PUBLISH_TOKEN` with a fine-grained token scoped to **Ratslayer/ai-pages** with **Contents: Read and write**. Run **Calorie Watcher page** on `main` once. The workflow creates the catalog at `feed/catalog.json`.
-2. Create a separate fine-grained token scoped to **Ratslayer/ai-pages** with **Contents: Read-only**. On the phone, tap **Configure updates** and enter that token and the base64 public key printed above.
+2. On the phone, tap **Configure updates**, enter the base64 signing public key printed above, and leave **GitHub read token** blank. The public catalog works without a read token. If the catalog repository becomes private, enter a fine-grained token scoped to that repository with **Contents: Read-only**.
 3. Tap **Refresh tools**, then open **Calorie Watcher**. Later web releases use the same refresh button. The app verifies signatures, keeps a cached bundle for offline use, and offers **Restore previous bundle** after an update.
 
 To back up one tool, open it and tap **Backup**. Pick an on-device location or a cloud provider available in the Android file picker. **Restore** replaces that tool's local data. Treat the exported JSON as private. It includes entries and settings for the tool. It excludes sign-in credentials and photos. It does not sync devices.

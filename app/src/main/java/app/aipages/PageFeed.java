@@ -53,7 +53,6 @@ final class PageFeed {
     }
 
     void configure(String token, String publicKey) throws Exception {
-        if (token.isEmpty() && !settings.contains("token")) throw new IOException("Enter a GitHub read token.");
         if (!token.isEmpty() && !token.matches("[A-Za-z0-9_]{20,256}")) {
             throw new IOException("Enter a valid GitHub token.");
         }
@@ -64,6 +63,8 @@ final class PageFeed {
             cipher.init(Cipher.ENCRYPT_MODE, ChatGpt.secretKey());
             changes.putString("token-iv", encode(cipher.getIV()));
             changes.putString("token", encode(cipher.doFinal(token.getBytes(StandardCharsets.UTF_8))));
+        } else {
+            changes.remove("token").remove("token-iv");
         }
         if (!changes.commit()) throw new IOException("Could not save the update settings.");
     }
@@ -91,24 +92,21 @@ final class PageFeed {
     }
 
     String refresh() throws Exception {
-        String token = settings.getString("token", null);
-        if (token == null || publicKey().isEmpty()) throw new IOException("Configure updates first.");
-        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        cipher.init(Cipher.DECRYPT_MODE, ChatGpt.secretKey(),
-                new GCMParameterSpec(128, decode(settings.getString("token-iv", ""))));
-        String bearer = new String(cipher.doFinal(decode(token)), StandardCharsets.UTF_8);
+        if (publicKey().isEmpty()) throw new IOException("Configure updates first.");
+        String bearer = readToken();
         HttpsURLConnection connection = (HttpsURLConnection) new URL(ENDPOINT).openConnection();
         connection.setInstanceFollowRedirects(false);
         connection.setConnectTimeout(15_000);
         connection.setReadTimeout(15_000);
-        connection.setRequestProperty("Authorization", "Bearer " + bearer);
+        if (bearer != null) connection.setRequestProperty("Authorization", "Bearer " + bearer);
         connection.setRequestProperty("Accept", "application/vnd.github.raw+json");
         byte[] data;
         try {
             int status = connection.getResponseCode();
-            if (status != 200) {
-                throw new IOException("GitHub returned HTTP " + status + ". Check your read token and feed publication.");
+            if (status == 404) {
+                throw new IOException("Catalog not found. Check that the page workflow published it.");
             }
+            if (status != 200) throw new IOException("GitHub returned HTTP " + status + ".");
             try (InputStream input = connection.getInputStream()) {
                 data = read(input, MAX_SIZE);
             }
@@ -116,6 +114,15 @@ final class PageFeed {
             connection.disconnect();
         }
         return install(data);
+    }
+
+    private String readToken() throws Exception {
+        String token = settings.getString("token", null);
+        if (token == null) return null;
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, ChatGpt.secretKey(),
+                new GCMParameterSpec(128, decode(settings.getString("token-iv", ""))));
+        return new String(cipher.doFinal(decode(token)), StandardCharsets.UTF_8);
     }
 
     private synchronized String install(byte[] data) throws Exception {
