@@ -22,6 +22,12 @@ class CatalogPublicationTest(unittest.TestCase):
             )
             public_key = directory / "public.pem"
             subprocess.run(["openssl", "pkey", "-in", str(key), "-pubout", "-out", str(public_key)], check=True)
+            public_file = directory / "public.txt"
+            public_der = subprocess.run(
+                ["openssl", "pkey", "-pubin", "-in", str(public_key), "-outform", "DER"],
+                check=True, capture_output=True,
+            ).stdout
+            public_file.write_bytes(base64.b64encode(public_der))
             entries = [
                 {"id": "calorie-watcher", "title": "Calorie Watcher"},
                 {"id": "second-tool", "title": "Second Tool"},
@@ -45,9 +51,9 @@ class CatalogPublicationTest(unittest.TestCase):
                 writes.append(body)
                 existing = {"content": body["content"], "sha": "expected-file-sha"}
 
-            with patch.object(publish_catalog, "github", side_effect=github), patch.dict(
-                os.environ, {"AI_PAGES_SIGNING_KEY": key.read_text(encoding="utf-8")}
-            ):
+            with patch.object(publish_catalog, "github", side_effect=github), patch.object(
+                publish_catalog, "PUBLIC_KEY_FILE", public_file
+            ), patch.dict(os.environ, {"AI_PAGES_SIGNING_KEY": key.read_text(encoding="utf-8")}):
                 publish_catalog.publish(entries, directory)
                 publish_catalog.publish(entries, directory)
                 self.assertEqual(len(writes), 1)
@@ -71,3 +77,8 @@ class CatalogPublicationTest(unittest.TestCase):
 
                 publish_catalog.publish(entries[:1], directory)
                 self.assertEqual(writes[1]["sha"], "expected-file-sha")
+
+                public_file.write_bytes(base64.b64encode(public_der[:-1] + b"\x00"))
+                with self.assertRaisesRegex(ValueError, "does not match the public key"):
+                    publish_catalog.publish(entries[:1], directory)
+                self.assertEqual(len(writes), 2)

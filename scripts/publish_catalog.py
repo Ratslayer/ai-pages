@@ -12,6 +12,7 @@ from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SOURCES = Path("catalog-sources.json")
+PUBLIC_KEY_FILE = Path("app/src/main/assets/ai-pages-public.txt")
 ASSETS = ("index.html", "app.js", "style.css")
 MAX_SIZE = 900_000
 
@@ -103,6 +104,13 @@ def publish(entries, artifacts):
         key = Path(directory) / "private.pem"
         key.touch(mode=0o600)
         key.write_text(private_key + "\n", encoding="utf-8")
+        expected = base64.b64decode("".join(PUBLIC_KEY_FILE.read_text(encoding="utf-8").split()), validate=True)
+        actual = subprocess.run(
+            ["openssl", "pkey", "-in", str(key), "-pubout", "-outform", "DER"],
+            capture_output=True, check=True,
+        ).stdout
+        if actual != expected:
+            raise ValueError("AI_PAGES_SIGNING_KEY does not match the public key committed to AI Pages.")
         revision, envelope = signed_catalog(entries, artifacts, key)
 
     try:

@@ -15,10 +15,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyFactory;
 import java.security.PublicKey;
 import java.security.Signature;
-import java.security.spec.X509EncodedKeySpec;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -30,19 +28,24 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.net.ssl.HttpsURLConnection;
 
 final class PageFeed {
-    private static final String ENDPOINT =
-            "https://api.github.com/repos/Ratslayer/ai-pages/contents/feed/catalog.json?ref=main";
+    private static final String CONTENTS = "https://api.github.com/repos/Ratslayer/ai-pages/contents/";
+    private static final String CATALOG_PATH = "feed/catalog.json";
+    private static final String KEY_FILE = "ai-pages-public.txt";
+    private static final String KEY_PATH = "app/src/main/assets/" + KEY_FILE;
+    private static final int MAX_KEY_SIZE = 4_096;
     private static final int MAX_SIZE = 900_000;
     static final List<String> ASSETS = Arrays.asList("index.html", "app.js", "style.css");
 
     record Page(String id, String title, Map<String, String> files) {}
     private record Catalog(String revision, Map<String, Page> pages) {}
 
+    private final Context context;
     private final SharedPreferences settings;
     private final AtomicFile current;
     private final AtomicFile previous;
 
     PageFeed(Context context) {
+        this.context = context.getApplicationContext();
         settings = context.getSharedPreferences("page-feed", Context.MODE_PRIVATE);
         current = new AtomicFile(new File(context.getFilesDir(), "catalog.json"));
         previous = new AtomicFile(new File(context.getFilesDir(), "previous-catalog.json"));
@@ -52,12 +55,19 @@ final class PageFeed {
         return settings.getString("public-key", "");
     }
 
+    boolean hasKeyWarning() {
+        return settings.getBoolean("catalog-key-changed", false);
+    }
+
     void configure(String token, String publicKey) throws Exception {
         if (!token.isEmpty() && !token.matches("[A-Za-z0-9_]{20,256}")) {
             throw new IOException("Enter a valid GitHub token.");
         }
-        parseKey(publicKey);
-        SharedPreferences.Editor changes = settings.edit().putString("public-key", publicKey);
+        SharedPreferences.Editor changes = settings.edit();
+        if (!publicKey.isEmpty() && !publicKey.equals(publicKey())) {
+            PublicKey entered = CatalogKey.parse(publicKey);
+            changes.putString("public-key", encode(entered.getEncoded()));
+        }
         if (!token.isEmpty()) {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, ChatGpt.secretKey());
@@ -71,10 +81,11 @@ final class PageFeed {
 
     synchronized Map<String, Page> cachedPages() throws Exception {
         if (publicKey().isEmpty()) return Collections.emptyMap();
+        PublicKey key = trustedKey();
         try {
-            return verify(current.readFully()).pages();
+            return verify(current.readFully(), key).pages();
         } catch (Exception ignored) {
-            if (previous.getBaseFile().exists()) return verify(previous.readFully()).pages();
+            if (previous.getBaseFile().exists()) return verify(previous.readFully(), key).pages();
             if (current.getBaseFile().exists()) throw ignored;
             return Collections.emptyMap();
         }
@@ -86,34 +97,73 @@ final class PageFeed {
 
     synchronized void restorePrevious() throws Exception {
         byte[] old = previous.readFully();
-        verify(old);
+        verify(old, trustedKey());
         write(current, old);
         previous.delete();
     }
 
+    void checkSigningKey() throws Exception {
+        checkedSigningKey(readToken());
+    }
+
     String refresh() throws Exception {
-        if (publicKey().isEmpty()) throw new IOException("Configure updates first.");
         String bearer = readToken();
-        HttpsURLConnection connection = (HttpsURLConnection) new URL(ENDPOINT).openConnection();
+        PublicKey key = checkedSigningKey(bearer);
+        byte[] data = download(CATALOG_PATH, bearer, MAX_SIZE);
+        String result = install(data, key);
+        if (!settings.edit().putString("public-key", encode(key.getEncoded()))
+                .remove("catalog-key-changed").commit()) {
+            throw new IOException("Could not save the trusted catalog key.");
+        }
+        return result;
+    }
+
+    private PublicKey trustedKey() throws IOException {
+        String saved = publicKey();
+        if (!saved.isEmpty()) {
+            // Existing installs stored the original input using Android's Base64 decoder.
+            try {
+                return CatalogKey.parse(decode(saved));
+            } catch (IllegalArgumentException e) {
+                throw new IOException("The saved catalog signing public key is invalid.", e);
+            }
+        }
+        try (InputStream bundled = context.getAssets().open(KEY_FILE)) {
+            return CatalogKey.parse(new String(read(bundled, MAX_KEY_SIZE), StandardCharsets.UTF_8));
+        }
+    }
+
+    private PublicKey checkedSigningKey(String bearer) throws Exception {
+        PublicKey trusted = trustedKey();
+        byte[] published = download(KEY_PATH, bearer, MAX_KEY_SIZE);
+        try {
+            return CatalogKey.requireMatch(trusted, new String(published, StandardCharsets.UTF_8));
+        } catch (CatalogKey.Changed e) {
+            settings.edit().putBoolean("catalog-key-changed", true).apply();
+            throw e;
+        }
+    }
+
+    private static byte[] download(String path, String bearer, int max) throws IOException {
+        HttpsURLConnection connection = (HttpsURLConnection) new URL(CONTENTS + path + "?ref=main").openConnection();
         connection.setInstanceFollowRedirects(false);
         connection.setConnectTimeout(15_000);
         connection.setReadTimeout(15_000);
         if (bearer != null) connection.setRequestProperty("Authorization", "Bearer " + bearer);
         connection.setRequestProperty("Accept", "application/vnd.github.raw+json");
-        byte[] data;
         try {
             int status = connection.getResponseCode();
-            if (status == 404) {
+            if (status == 404 && CATALOG_PATH.equals(path)) {
                 throw new IOException("Catalog not found. Check that the page workflow published it.");
             }
+            if (status == 404) throw new IOException("The catalog public key could not be found on GitHub.");
             if (status != 200) throw new IOException("GitHub returned HTTP " + status + ".");
             try (InputStream input = connection.getInputStream()) {
-                data = read(input, MAX_SIZE);
+                return read(input, max);
             }
         } finally {
             connection.disconnect();
         }
-        return install(data);
     }
 
     private String readToken() throws Exception {
@@ -125,13 +175,13 @@ final class PageFeed {
         return new String(cipher.doFinal(decode(token)), StandardCharsets.UTF_8);
     }
 
-    private synchronized String install(byte[] data) throws Exception {
-        Catalog incoming = verify(data);
+    private synchronized String install(byte[] data, PublicKey key) throws Exception {
+        Catalog incoming = verify(data, key);
         if (current.getBaseFile().exists()) {
             byte[] old = current.readFully();
             Catalog installed = null;
             try {
-                installed = verify(old);
+                installed = verify(old, key);
             } catch (Exception ignored) {
                 // The signing key may have changed. Only keep a verified previous catalog.
             }
@@ -144,12 +194,12 @@ final class PageFeed {
         return "Updated " + incoming.pages().size() + " tool(s).";
     }
 
-    private Catalog verify(byte[] envelope) throws Exception {
+    private Catalog verify(byte[] envelope, PublicKey key) throws Exception {
         if (envelope.length > MAX_SIZE) throw new IOException("The tool catalog is too large.");
         JSONObject outer = new JSONObject(new String(envelope, StandardCharsets.UTF_8));
         byte[] payload = decode(outer.getString("payload"));
         Signature verifier = Signature.getInstance("SHA256withRSA");
-        verifier.initVerify(parseKey(publicKey()));
+        verifier.initVerify(key);
         verifier.update(payload);
         if (!verifier.verify(decode(outer.getString("signature")))) {
             throw new IOException("The tool catalog signature did not match your trusted key.");
@@ -171,14 +221,6 @@ final class PageFeed {
             pages.put(id, new Page(id, title, assets));
         }
         return new Catalog(catalog.getString("revision"), pages);
-    }
-
-    private static PublicKey parseKey(String value) throws IOException {
-        try {
-            return KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(decode(value)));
-        } catch (Exception e) {
-            throw new IOException("Enter the catalog signing public key (base64 DER).");
-        }
     }
 
     static byte[] read(InputStream input, int max) throws IOException {
