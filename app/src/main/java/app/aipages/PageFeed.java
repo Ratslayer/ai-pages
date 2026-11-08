@@ -68,7 +68,7 @@ final class PageFeed {
         if (!changes.commit()) throw new IOException("Could not save the update settings.");
     }
 
-    Map<String, Page> cachedPages() throws Exception {
+    synchronized Map<String, Page> cachedPages() throws Exception {
         if (publicKey().isEmpty()) return Collections.emptyMap();
         try {
             return verify(current.readFully()).pages();
@@ -90,7 +90,7 @@ final class PageFeed {
         previous.delete();
     }
 
-    synchronized String refresh() throws Exception {
+    String refresh() throws Exception {
         String token = settings.getString("token", null);
         if (token == null || publicKey().isEmpty()) throw new IOException("Configure updates first.");
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
@@ -115,6 +115,10 @@ final class PageFeed {
         } finally {
             connection.disconnect();
         }
+        return install(data);
+    }
+
+    private synchronized String install(byte[] data) throws Exception {
         Catalog incoming = verify(data);
         if (current.getBaseFile().exists()) {
             byte[] old = current.readFully();

@@ -235,7 +235,7 @@ public final class MainActivity extends Activity {
         view.getSettings().setJavaScriptEnabled(true);
         view.getSettings().setAllowFileAccess(false);
         view.getSettings().setAllowContentAccess(false);
-        view.getSettings().setBlockNetworkLoads(true);
+        // Requests are rejected by the interceptor so the synthetic HTTPS origin can still load.
         view.setWebChromeClient(new android.webkit.WebChromeClient());
         view.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView webView, WebResourceRequest request) {
@@ -355,8 +355,8 @@ public final class MainActivity extends Activity {
                             Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".photos", cameraFile);
                             Intent capture = new Intent(MediaStore.ACTION_IMAGE_CAPTURE)
                                     .putExtra(MediaStore.EXTRA_OUTPUT, uri)
-                                    .setClipData(android.content.ClipData.newRawUri("meal", uri))
                                     .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            capture.setClipData(android.content.ClipData.newRawUri("meal", uri));
                             startActivityForResult(capture, TAKE_PHOTO);
                         }
                     } catch (Exception e) {
