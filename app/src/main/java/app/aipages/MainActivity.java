@@ -1,6 +1,5 @@
 package app.aipages;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -24,6 +23,8 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import androidx.activity.ComponentActivity;
+import androidx.activity.OnBackPressedCallback;
 import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.core.content.FileProvider;
 import androidx.webkit.JavaScriptReplyProxy;
@@ -45,7 +46,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public final class MainActivity extends Activity {
+public final class MainActivity extends ComponentActivity {
     private static final int PICK_PHOTO = 1, TAKE_PHOTO = 2, EXPORT = 3, IMPORT = 4;
     private static final int MAX_DATA = 350_000;
     private static final String CSP = "default-src 'none'; script-src 'self'; style-src 'self'; "
@@ -61,9 +62,15 @@ public final class MainActivity extends Activity {
     private String status = "";
     private ToolScreen tool;
     private File cameraFile;
+    private final OnBackPressedCallback backToTools = new OnBackPressedCallback(false) {
+        @Override public void handleOnBackPressed() {
+            if (tool != null && !tool.busy) showHome();
+        }
+    };
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
+        getOnBackPressedDispatcher().addCallback(this, backToTools);
         if (android.os.Build.VERSION.SDK_INT >= 35) {
             getWindow().getDecorView().setOnApplyWindowInsetsListener((view, insets) -> {
                 android.graphics.Insets padding = insets.getInsets(android.view.WindowInsets.Type.systemBars());
@@ -138,6 +145,7 @@ public final class MainActivity extends Activity {
         if (view.getParent() instanceof ViewGroup parent) parent.removeView(view);
         view.destroy();
         tool = null;
+        backToTools.setEnabled(false);
     }
 
     private void configureFeed() {
@@ -231,6 +239,7 @@ public final class MainActivity extends Activity {
         }
         ToolScreen screen = new ToolScreen(page);
         tool = screen;
+        backToTools.setEnabled(true);
         WebView view = screen.view;
         view.getSettings().setJavaScriptEnabled(true);
         view.getSettings().setAllowFileAccess(false);
@@ -247,7 +256,7 @@ public final class MainActivity extends Activity {
                 if ("GET".equals(request.getMethod()) && "https".equals(url.getScheme())
                         && screen.host.equals(url.getEncodedAuthority()) && url.getEncodedQuery() == null) {
                     String path = url.getEncodedPath();
-                    String name = path == null ? "" : path.substring(1);
+                    String name = path != null && path.startsWith("/") ? path.substring(1) : "";
                     String content = page.files().get(name);
                     if (content != null) {
                         String mime = switch (name) {
@@ -586,11 +595,6 @@ public final class MainActivity extends Activity {
         if (attempt != null) {
             try { attempt.close(); } catch (IOException ignored) { }
         }
-    }
-
-    @Override public void onBackPressed() {
-        if (tool == null) super.onBackPressed();
-        else if (!tool.busy) showHome();
     }
 
     @Override protected void onDestroy() {
