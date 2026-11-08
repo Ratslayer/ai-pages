@@ -13,24 +13,19 @@ This uses OpenAI's [Sign in with ChatGPT for local clients](https://developers.o
 
 ## Set up the tool feed
 
-Generate a signing key on a trusted machine:
+The Android app ships with the [catalog public key](app/src/main/assets/ai-pages-public.txt). It checks the public copy on GitHub on first launch and during refresh. It saves that key after verifying the first signed catalog. Later launches also check for a key change.
 
-```sh
-umask 077
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out ai-pages-private.pem
-openssl pkey -in ai-pages-private.pem -pubout -outform DER | openssl base64 -A
-```
-
-Add these [Actions secrets in AI Pages](https://github.com/Ratslayer/ai-pages/settings/secrets/actions) once:
+The matching private PEM belongs in the [AI Pages Actions secrets](https://github.com/Ratslayer/ai-pages/settings/secrets/actions).
 
 | Secret | Value |
 | --- | --- |
-| `AI_PAGES_SIGNING_KEY` | The full RSA private PEM from the command above. Reuse the same key pair if the phone already trusts it. |
-| `AI_PAGES_SOURCE_TOKEN` | A fine-grained token for the private source repositories with **Contents: Read-only**. Select `Ratslayer/calorie-watcher` for the current catalog. |
+| `AI_PAGES_SIGNING_KEY` | The private PEM matching the committed public key. |
+| `AI_PAGES_SOURCE_TOKEN` | A fine-grained token for private source repositories with **Contents: Read-only**. Select `Ratslayer/calorie-watcher` for the current catalog. |
 
-1. In [AI Pages Actions](https://github.com/Ratslayer/ai-pages/actions/workflows/publish-catalog.yml), run **Publish catalog** on `main`. It builds every registered page and writes the signed catalog to `feed/catalog.json` using its built-in GitHub token.
-2. On the phone, tap **Configure updates**, enter the base64 signing public key printed above, and leave **GitHub read token** blank. The public catalog works without a read token.
-3. Tap **Refresh tools**, then open **Calorie Watcher**. To publish a later page change, run **Publish catalog** again. The app verifies signatures, keeps a cached bundle for offline use, and offers **Restore previous bundle** after an update.
+1. In [AI Pages Actions](https://github.com/Ratslayer/ai-pages/actions/workflows/publish-catalog.yml), run **Publish catalog** on `main`. It checks that the signing secret matches the committed public key before publishing.
+2. Open the app or tap **Refresh tools** to download the signed catalog. To publish later page changes, run **Publish catalog** again.
+
+If you deliberately rotate the signing key, update the secret and the committed public key together, then publish. Existing installations warn and stop accepting updates until you paste the new key from your signing machine into **Configure updates** and refresh. Use the same key file for future APK builds.
 
 Add new pages to [catalog-sources.json](catalog-sources.json). Each source repo uses Node 22 and emits `dist/index.html`, `dist/app.js`, and `dist/style.css` with `npm ci` and `npm run build`. Add a new private source to the read token's repository access. Public sources need only a list entry. The compiled pages are published in the public AI Pages catalog.
 
@@ -49,4 +44,4 @@ A verified tool supplies `index.html`, `app.js`, and `style.css`. The shell serv
 
 ## Build
 
-With JDK 17, Gradle 8.13, and Android SDK platform 36, run `bash tests/check-callback.sh` and `gradle lintDebug assembleDebug`. The APK is at `app/build/outputs/apk/debug/app-debug.apk`.
+With JDK 17, Gradle 8.13, and Android SDK platform 36, run `bash tests/check-java.sh` and `gradle lintDebug assembleDebug`. The APK is at `app/build/outputs/apk/debug/app-debug.apk`.

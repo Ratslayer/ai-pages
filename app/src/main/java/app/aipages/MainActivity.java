@@ -5,6 +5,8 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.Typeface;
 import android.graphics.ImageDecoder;
 import android.net.Uri;
 import android.os.Bundle;
@@ -82,6 +84,21 @@ public final class MainActivity extends ComponentActivity {
         feed = new PageFeed(this);
         chat = new ChatGpt(this);
         showHome();
+        if (feed.publicKey().isEmpty()) {
+            update(feed::refresh);
+        } else {
+            worker.execute(() -> {
+                try {
+                    feed.checkSigningKey();
+                } catch (CatalogKey.Changed changed) {
+                    runOnUiThread(() -> {
+                        if (!isDestroyed() && tool == null && !updating) showHome();
+                    });
+                } catch (Exception ignored) {
+                    // Cached tools stay available offline. Refresh reports network errors.
+                }
+            });
+        }
     }
 
     private void showHome() {
@@ -95,6 +112,19 @@ public final class MainActivity extends ComponentActivity {
         title.setText("AI Pages");
         title.setTextSize(30);
         body.addView(title);
+        if (feed.hasKeyWarning()) {
+            TextView warning = new TextView(this);
+            warning.setText("PUBLIC KEY HAS CHANGED\nTool updates are paused. Make sure you are the one who changed "
+                    + "the key. Get it from your own signing setup, then update it in Configure updates.");
+            warning.setTextSize(20);
+            warning.setTypeface(null, Typeface.BOLD);
+            warning.setTextColor(Color.WHITE);
+            warning.setBackgroundColor(Color.rgb(160, 20, 20));
+            int inset = Math.round(12 * getResources().getDisplayMetrics().density);
+            warning.setPadding(inset, inset, inset, inset);
+            warning.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE);
+            body.addView(warning);
+        }
         TextView message = new TextView(this);
         message.setText(status);
         message.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
@@ -126,7 +156,7 @@ public final class MainActivity extends ComponentActivity {
             Map<String, PageFeed.Page> pages = feed.cachedPages();
             if (pages.isEmpty()) {
                 TextView empty = new TextView(this);
-                empty.setText("Configure the tool catalog, then refresh to download tools.");
+                empty.setText("Tap Refresh tools to download the catalog.");
                 body.addView(empty);
             }
             for (PageFeed.Page page : pages.values()) {
@@ -157,7 +187,7 @@ public final class MainActivity extends ComponentActivity {
         fields.addView(token);
         fields.addView(key);
         new AlertDialog.Builder(this).setTitle("Tool updates")
-                .setMessage("For the public AI Pages catalog, enter the signing public key and leave the GitHub token blank. Saving a blank token clears any saved token.")
+                .setMessage("AI Pages verifies the published key against the key in this app or one you have saved. Enter a replacement only if you changed it yourself. Leave the GitHub token blank for the public catalog.")
                 .setView(fields).setNegativeButton("Cancel", null).setPositiveButton("Save", (dialog, button) -> {
                     String credential = token.getText().toString().trim();
                     String publicKey = key.getText().toString().trim();
