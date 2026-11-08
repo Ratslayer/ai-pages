@@ -53,7 +53,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends ComponentActivity {
-    private static final int PICK_PHOTO = 1, TAKE_PHOTO = 2, EXPORT = 3, IMPORT = 4;
+    private static final int PICK_PHOTO = 1, TAKE_PHOTO = 2, EXPORT = 3, IMPORT = 4, IMPORT_CATALOG = 5;
     private static final int MAX_DATA = 350_000;
     private static final String FINISH_SIGN_IN = "app.aipages.FINISH_SIGN_IN";
     private static final String SIGN_IN_ACTION_ID = "app.aipages.SIGN_IN_ACTION_ID";
@@ -159,6 +159,8 @@ public final class MainActivity extends ComponentActivity {
         }
         addButton(body, "Configure updates", () -> { if (!updating) configureFeed(); });
         addButton(body, updating ? "Working…" : "Refresh tools", () -> update(feed::refresh)).setEnabled(!updating);
+        addButton(body, "Import signed catalog", this::chooseCatalog)
+                .setEnabled(!updating && !feed.hasKeyWarning());
         if (feed.hasPrevious()) {
             addButton(body, "Restore previous bundle", () -> update(() -> {
                 feed.restorePrevious();
@@ -189,6 +191,14 @@ public final class MainActivity extends ComponentActivity {
         view.destroy();
         tool = null;
         backToTools.setEnabled(false);
+    }
+
+    private void chooseCatalog() {
+        try {
+            startActivityForResult(document(Intent.ACTION_OPEN_DOCUMENT, "*/*"), IMPORT_CATALOG);
+        } catch (ActivityNotFoundException e) {
+            toast("No document picker is available.");
+        }
     }
 
     private void configureFeed() {
@@ -471,8 +481,18 @@ public final class MainActivity extends ComponentActivity {
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
-        ToolScreen screen = tool;
         Uri uri = data == null ? null : data.getData();
+        if (request == IMPORT_CATALOG) {
+            if (result == RESULT_OK && uri != null) {
+                update(() -> {
+                    try (InputStream input = getContentResolver().openInputStream(uri)) {
+                        return feed.importCatalog(input);
+                    }
+                });
+            }
+            return;
+        }
+        ToolScreen screen = tool;
         if (request == PICK_PHOTO || request == TAKE_PHOTO) {
             if (screen == null || result != RESULT_OK || (uri == null && request == PICK_PHOTO)
                     || (cameraFile == null && request == TAKE_PHOTO)) {

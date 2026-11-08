@@ -6,6 +6,7 @@ import android.util.AtomicFile;
 import android.util.Base64;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -30,6 +31,7 @@ import javax.net.ssl.HttpsURLConnection;
 final class PageFeed {
     private static final String PUBLIC_CONTENTS =
             "https://raw.githubusercontent.com/Ratslayer/ai-pages/refs/heads/main/";
+    private static final String PUBLIC_MIRROR = "https://cdn.jsdelivr.net/gh/Ratslayer/ai-pages@main/";
     private static final String API_CONTENTS = "https://api.github.com/repos/Ratslayer/ai-pages/contents/";
     private static final String CATALOG_PATH = "feed/catalog.json";
     private static final String KEY_FILE = "ai-pages-public.txt";
@@ -111,8 +113,21 @@ final class PageFeed {
     String refresh() throws Exception {
         String bearer = readToken();
         PublicKey key = checkedSigningKey(bearer);
-        byte[] data = download(CATALOG_PATH, bearer, MAX_SIZE);
-        String result = install(data, key);
+        return acceptCatalog(download(CATALOG_PATH, bearer, MAX_SIZE), key);
+    }
+
+    String importCatalog(InputStream input) throws Exception {
+        if (hasKeyWarning()) throw new IOException("Verify the changed signing key online before importing a catalog.");
+        return acceptCatalog(read(input, MAX_SIZE), trustedKey());
+    }
+
+    private String acceptCatalog(byte[] data, PublicKey key) throws Exception {
+        String result;
+        try {
+            result = install(data, key);
+        } catch (JSONException e) {
+            throw new IOException("This file is not a valid signed AI Pages catalog.", e);
+        }
         if (!settings.edit().putString("public-key", encode(key.getEncoded()))
                 .remove("catalog-key-changed").commit()) {
             throw new IOException("Could not save the trusted catalog key.");
@@ -137,7 +152,10 @@ final class PageFeed {
 
     private PublicKey checkedSigningKey(String bearer) throws Exception {
         PublicKey trusted = trustedKey();
-        byte[] published = download(KEY_PATH, bearer, MAX_KEY_SIZE);
+        // A stale mirror must never clear a key change that the app already saw.
+        byte[] published = bearer == null && hasKeyWarning()
+                ? downloadAt(PUBLIC_CONTENTS + KEY_PATH, "Signing key", null, MAX_KEY_SIZE)
+                : download(KEY_PATH, bearer, MAX_KEY_SIZE);
         try {
             return CatalogKey.requireMatch(trusted, new String(published, StandardCharsets.UTF_8));
         } catch (CatalogKey.Changed e) {
@@ -147,8 +165,22 @@ final class PageFeed {
     }
 
     private static byte[] download(String path, String bearer, int max) throws IOException {
-        String endpoint = bearer == null ? PUBLIC_CONTENTS + path : API_CONTENTS + path + "?ref=main";
-        HttpsURLConnection connection = (HttpsURLConnection) new URL(endpoint).openConnection();
+        String file = CATALOG_PATH.equals(path) ? "Catalog" : "Signing key";
+        if (bearer != null) return downloadAt(API_CONTENTS + path + "?ref=main", file, bearer, max);
+        try {
+            return downloadAt(PUBLIC_CONTENTS + path, file, null, max);
+        } catch (IOException primary) {
+            try {
+                return downloadAt(PUBLIC_MIRROR + path, file, null, max);
+            } catch (IOException mirror) {
+                throw new IOException(primary.getMessage() + " " + mirror.getMessage(), mirror);
+            }
+        }
+    }
+
+    private static byte[] downloadAt(String endpoint, String file, String bearer, int max) throws IOException {
+        URL url = new URL(endpoint);
+        HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
         connection.setInstanceFollowRedirects(false);
         connection.setConnectTimeout(15_000);
         connection.setReadTimeout(15_000);
@@ -161,20 +193,21 @@ final class PageFeed {
             int status = connection.getResponseCode();
             if (status == 429 || (status == 403 && ("0".equals(connection.getHeaderField("X-RateLimit-Remaining"))
                     || connection.getHeaderField("Retry-After") != null))) {
-                throw new IOException("GitHub download rate limit reached. Try refreshing again later.");
+                throw new IOException("Rate limited (HTTP " + status + ").");
             }
             if (bearer != null && (status == 401 || status == 403)) {
-                throw new IOException("GitHub denied the saved read token. Check it or clear it in Configure updates "
-                        + "to use the public catalog.");
+                throw new IOException("GitHub denied the saved read token (HTTP " + status
+                        + "). Check it or clear it in Configure updates to use the public catalog.");
             }
-            if (status == 404 && CATALOG_PATH.equals(path)) {
-                throw new IOException("Catalog not found. Check that the page workflow published it.");
+            if (status == 404 && "Catalog".equals(file)) {
+                throw new IOException("HTTP 404. Check that the page workflow published it.");
             }
-            if (status == 404) throw new IOException("The catalog public key could not be found on GitHub.");
-            if (status != 200) throw new IOException("GitHub returned HTTP " + status + ".");
+            if (status != 200) throw new IOException("HTTP " + status + ".");
             try (InputStream input = connection.getInputStream()) {
                 return read(input, max);
             }
+        } catch (IOException e) {
+            throw new IOException(file + " from " + url.getHost() + ": " + e.getMessage(), e);
         } finally {
             connection.disconnect();
         }
