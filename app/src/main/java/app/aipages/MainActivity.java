@@ -1,13 +1,16 @@
 package app.aipages;
 
 import android.app.AlertDialog;
+import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.ImageDecoder;
+import android.graphics.Paint;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.MediaStore;
@@ -45,12 +48,15 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends ComponentActivity {
     private static final int PICK_PHOTO = 1, TAKE_PHOTO = 2, EXPORT = 3, IMPORT = 4;
     private static final int MAX_DATA = 350_000;
+    private static final String FINISH_SIGN_IN = "app.aipages.FINISH_SIGN_IN";
+    private static final String SIGN_IN_ACTION_ID = "app.aipages.SIGN_IN_ACTION_ID";
     private static final String CSP = "default-src 'none'; script-src 'self'; style-src 'self'; "
             + "base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
 
@@ -59,6 +65,8 @@ public final class MainActivity extends ComponentActivity {
     private PageFeed feed;
     private ChatGpt chat;
     private ChatGpt.SignIn pendingSignIn;
+    private PendingIntent finishSignInAction;
+    private String signInActionId;
     private boolean signingIn;
     private boolean updating;
     private String status = "";
@@ -83,6 +91,11 @@ public final class MainActivity extends ComponentActivity {
         if (saved == null) new File(getCacheDir(), "meal-photos/meal.jpg").delete();
         feed = new PageFeed(this);
         chat = new ChatGpt(this);
+        if (FINISH_SIGN_IN.equals(getIntent().getAction())) {
+            // A recreated process has no live OAuth attempt or PKCE verifier.
+            setIntent(new Intent(this, MainActivity.class));
+            status = "This sign-in attempt ended. Start sign-in again.";
+        }
         showHome();
         if (feed.publicKey().isEmpty()) {
             update(feed::refresh);
@@ -211,10 +224,11 @@ public final class MainActivity extends ComponentActivity {
                         return;
                     }
                     pendingSignIn = attempt;
-                    status = "If the browser times out, copy its address and tap Paste redirect URL.";
+                    status = "If the browser times out at 127.0.0.1, tap the Finish sign-in checkmark in the browser.";
                     showHome();
                     try {
                         new CustomTabsIntent.Builder().setShareState(CustomTabsIntent.SHARE_STATE_OFF)
+                                .setActionButton(finishSignInIcon(), "Finish sign-in", createFinishSignInAction(), true)
                                 .build().launchUrl(this, attempt.browserUrl);
                     } catch (ActivityNotFoundException e) {
                         close(attempt);
@@ -223,6 +237,7 @@ public final class MainActivity extends ComponentActivity {
                 attempt.finish(() -> runOnUiThread(() -> {
                     if (isDestroyed()) return;
                     pendingSignIn = null;
+                    clearFinishSignInAction();
                     status = "Browser response received. Connecting to OpenAI…";
                     showHome();
                 }));
@@ -231,6 +246,54 @@ public final class MainActivity extends ComponentActivity {
                 finishSignIn(message(e, "Could not connect to ChatGPT."));
             }
         });
+    }
+
+    private PendingIntent createFinishSignInAction() {
+        signInActionId = UUID.randomUUID().toString();
+        Intent action = new Intent(this, MainActivity.class).setAction(FINISH_SIGN_IN)
+                .putExtra(SIGN_IN_ACTION_ID, signInActionId)
+                .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        // Custom Tabs supplies the current URL as the intent data.
+        finishSignInAction = PendingIntent.getActivity(this, 0, action,
+                PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_CANCEL_CURRENT);
+        return finishSignInAction;
+    }
+
+    private void clearFinishSignInAction() {
+        if (finishSignInAction != null) finishSignInAction.cancel();
+        finishSignInAction = null;
+        signInActionId = null;
+    }
+
+    private Bitmap finishSignInIcon() {
+        int size = Math.round(24 * getResources().getDisplayMetrics().density);
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        canvas.scale(size / 24f, size / 24f);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        paint.setColor(Color.WHITE);
+        paint.setStrokeWidth(2.5f);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        canvas.drawLines(new float[]{4, 12, 9, 17, 9, 17, 20, 6}, paint);
+        return bitmap;
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (!FINISH_SIGN_IN.equals(intent.getAction()) || pendingSignIn == null || signInActionId == null
+                || !signInActionId.equals(intent.getStringExtra(SIGN_IN_ACTION_ID))) {
+            return;
+        }
+        try {
+            Uri url = intent.getData();
+            if (url == null) throw new IOException("The browser did not send a redirect URL.");
+            pendingSignIn.submitRedirect(url.toString());
+            status = "Browser response received. Connecting to OpenAI…";
+        } catch (IOException e) {
+            status = "The browser did not send the current sign-in redirect. Return to the browser and tap the "
+                    + "checkmark at 127.0.0.1, or use Paste redirect URL.";
+        }
+        showHome();
     }
 
     private void pasteRedirect() {
@@ -254,6 +317,7 @@ public final class MainActivity extends ComponentActivity {
         runOnUiThread(() -> {
             if (isDestroyed()) return;
             pendingSignIn = null;
+            clearFinishSignInAction();
             signingIn = false;
             status = result;
             showHome();
@@ -628,6 +692,7 @@ public final class MainActivity extends ComponentActivity {
     }
 
     @Override protected void onDestroy() {
+        clearFinishSignInAction();
         close(pendingSignIn);
         if (tool != null) destroyTool();
         deleteCameraFile();

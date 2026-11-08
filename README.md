@@ -4,12 +4,25 @@ One Android shell for HTML and TypeScript tools. AI Pages owns ChatGPT sign-in, 
 
 ## Install and check sign-in
 
-1. Download **ai-pages-debug** from a successful **Android APK** workflow run, extract it, and install the APK on Android 9 or newer. Use a current Android System WebView.
+1. Download **ai-pages-installable** from a successful **Android APK** workflow run on `main`, extract it, and install the APK on Android 9 or newer. Set up the stable signer below before the first install. Use a current Android System WebView.
 2. Tap **Continue with ChatGPT** and grant **Use your ChatGPT plan**. Return to the app after the browser receives the response.
-3. If the browser times out at `127.0.0.1`, copy its **full address**. In AI Pages tap **Paste redirect URL** and paste it. The address contains a one-time code. Use the address from the current attempt. If the attempt expires or Android kills the app process, start a fresh sign-in.
+3. If the browser times out at `127.0.0.1`, tap the **Finish sign-in** checkmark in the browser toolbar. If your browser does not pass the redirect back, copy its full address and use **Paste redirect URL** in AI Pages. The address contains a one-time code for the current attempt.
 4. Tap **Test ChatGPT connection**. A response verifies model access on this device and account.
 
 This uses OpenAI's [Sign in with ChatGPT for local clients](https://developers.openai.com/siwc/token-sharing-open-source). The app has no API-key configuration. Credentials are encrypted with an Android Keystore key.
+
+## Set up APK signing once
+
+From a local checkout, generate an Android signing secret with OpenSSL:
+
+```sh
+bash scripts/create-android-signing-secret.sh "$HOME/ai-pages-android-signing.secret"
+pbcopy < "$HOME/ai-pages-android-signing.secret"
+```
+
+Paste the full file into `AI_PAGES_ANDROID_SIGNING` in the [AI Pages Actions secrets](https://github.com/Ratslayer/ai-pages/settings/secrets/actions). Keep a private backup of the file. Use the same secret for future APKs.
+
+Run [**Android APK**](https://github.com/Ratslayer/ai-pages/actions/workflows/android.yml) on `main` and download **ai-pages-installable**. Switching from the earlier preview APK requires one reinstall and sign-in. After that, install new **ai-pages-installable** APKs over the current app to keep the session and tool data. If you explicitly uninstall, choose **Keep app data** when Android offers it and reinstall with the same signer to retain local data.
 
 ## Set up the tool feed
 

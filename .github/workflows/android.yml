@@ -27,9 +27,36 @@ jobs:
           gradle-version: '8.13'
       - run: bash tests/check-java.sh
       - run: python3 -m unittest discover -s tests -p test_publish_catalog.py
-      - run: gradle --no-daemon lintDebug assembleDebug
+      - name: Build signed APK
+        id: apk
+        env:
+          SIGNING_SECRET: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && secrets.AI_PAGES_ANDROID_SIGNING || '' }}
+        run: |
+          temp="$(mktemp -d)"
+          trap 'rm -rf "$temp"' EXIT
+          artifact=ai-pages-installable
+          if [[ -z "$SIGNING_SECRET" ]]; then
+            artifact=ai-pages-debug
+            if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+              echo "::warning::Set AI_PAGES_ANDROID_SIGNING for in-place updates. This artifact is a preview."
+            fi
+            bash scripts/create-android-signing-secret.sh "$temp/preview.secret"
+            SIGNING_SECRET="$(cat "$temp/preview.secret")"
+          fi
+
+          export AI_PAGES_ANDROID_KEYSTORE_PASSWORD="${SIGNING_SECRET%%$'\n'*}"
+          if [[ ! "$AI_PAGES_ANDROID_KEYSTORE_PASSWORD" =~ ^[0-9a-f]{48}$ || "$SIGNING_SECRET" != *$'\n'* ]]; then
+            echo "::error::Invalid Android signing secret. Use scripts/create-android-signing-secret.sh."
+            exit 1
+          fi
+          echo "::add-mask::$AI_PAGES_ANDROID_KEYSTORE_PASSWORD"
+          export AI_PAGES_ANDROID_KEYSTORE="$temp/ai-pages.p12"
+          printf '%s' "${SIGNING_SECRET#*$'\n'}" | base64 --decode > "$AI_PAGES_ANDROID_KEYSTORE"
+          unset SIGNING_SECRET
+          gradle --no-daemon lintDebug assembleDebug
+          printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: ai-pages-debug
+          name: ${{ steps.apk.outputs.artifact }}
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
