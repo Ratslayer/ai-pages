@@ -350,6 +350,10 @@ final class ChatGpt {
     }
 
     String run(String prompt, byte[] jpeg) throws Exception {
+        return run(prompt, jpeg, false);
+    }
+
+    String run(String prompt, byte[] jpeg, boolean fastText) throws Exception {
         String token = accessToken();
         JSONArray content = new JSONArray().put(new JSONObject().put("type", "input_text").put("text", prompt));
         if (jpeg != null) {
@@ -357,8 +361,9 @@ final class ChatGpt {
                     .put("image_url", "data:image/jpeg;base64," + Base64.encodeToString(jpeg, Base64.NO_WRAP)));
         }
         JSONObject input = new JSONObject().put("role", "user").put("content", content);
-        JSONObject body = new JSONObject().put("model", "gpt-6.1-sol")
+        JSONObject body = new JSONObject().put("model", fastText ? "gpt-6-luna" : "gpt-6.1-sol")
                 .put("store", false).put("stream", true).put("input", new JSONArray().put(input));
+        if (fastText) body.put("reasoning", new JSONObject().put("effort", "none"));
         HttpsURLConnection conn = connection(API + "/responses", token, "application/json", body.toString());
         try {
             checkResponse(conn);

@@ -57,7 +57,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends ComponentActivity {
-    private static final int PICK_PHOTO = 1, TAKE_PHOTO = 2, EXPORT = 3, IMPORT = 4, IMPORT_CATALOG = 5;
+    private static final int PICK_PHOTO = 1, TAKE_PHOTO = 2, EXPORT = 3, IMPORT = 4, IMPORT_CATALOG = 5, PICK_TEXT = 6;
     private static final int MAX_DATA = 350_000;
     private static final String FINISH_SIGN_IN = "app.aipages.FINISH_SIGN_IN";
     private static final String SIGN_IN_ACTION_ID = "app.aipages.SIGN_IN_ACTION_ID";
@@ -492,6 +492,13 @@ public final class MainActivity extends ComponentActivity {
                     if (screen.busy) throw new IOException("Finish the current action first.");
                     pickPhoto(screen, proxy, id);
                 }
+                case "text.pick" -> {
+                    if (screen.busy) throw new IOException("Finish the current action first.");
+                    startActivityForResult(document(Intent.ACTION_OPEN_DOCUMENT, "text/plain"), PICK_TEXT);
+                    screen.textReply = proxy;
+                    screen.textId = id;
+                    screen.busy = true;
+                }
                 case "ai.run" -> {
                     if (screen.busy) throw new IOException("Finish the current action first.");
                     if (!chat.connected()) throw new IOException("Connect ChatGPT in AI Pages Settings first.");
@@ -499,7 +506,8 @@ public final class MainActivity extends ComponentActivity {
                     if (prompt.trim().isEmpty() || prompt.length() > 8_000) throw new IOException("Invalid prompt.");
                     byte[] photo = request.optBoolean("image") ? screen.photo : null;
                     if (request.optBoolean("image") && photo == null) throw new IOException("Choose a photo first.");
-                    confirmRun(screen, proxy, id, prompt, photo);
+                    boolean fastText = "fast-text".equals(request.optString("profile")) && photo == null;
+                    confirmRun(screen, proxy, id, prompt, photo, fastText);
                 }
                 default -> throw new IOException("Unsupported tool action.");
             }
@@ -578,7 +586,7 @@ public final class MainActivity extends ComponentActivity {
         reply(proxy, id, true, null);
     }
 
-    private void confirmRun(WebScreen screen, JavaScriptReplyProxy proxy, String id, String prompt, byte[] photo) {
+    private void confirmRun(WebScreen screen, JavaScriptReplyProxy proxy, String id, String prompt, byte[] photo, boolean fastText) {
         screen.busy = true;
         Runnable cancel = () -> {
             screen.busy = false;
@@ -589,7 +597,7 @@ public final class MainActivity extends ComponentActivity {
                 .setNegativeButton("Cancel", (dialog, button) -> cancel.run()).setOnCancelListener(d -> cancel.run())
                 .setPositiveButton("Send", (dialog, button) -> worker.execute(() -> {
                     try {
-                        String output = chat.run(prompt, photo);
+                        String output = chat.run(prompt, photo, fastText);
                         runOnUiThread(() -> complete(screen, proxy, id, output, null));
                     } catch (Exception e) {
                         runOnUiThread(() -> complete(screen, proxy, id, null, message(e, "ChatGPT request failed.")));
@@ -638,6 +646,33 @@ public final class MainActivity extends ComponentActivity {
             return;
         }
         WebScreen screen = route == Route.TOOL ? activePage : null;
+        if (request == PICK_TEXT) {
+            if (screen == null || screen.textReply == null) return;
+            JavaScriptReplyProxy proxy = screen.textReply;
+            String id = screen.textId;
+            screen.textReply = null;
+            screen.textId = null;
+            if (result != RESULT_OK || uri == null) {
+                complete(screen, proxy, id, null, null);
+                return;
+            }
+            worker.execute(() -> {
+                try (InputStream input = getContentResolver().openInputStream(uri)) {
+                    byte[] bytes = PageFeed.read(input, 4 * 1024 * 1024);
+                    String text = StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+                    String name = "Text file";
+                    String column = android.provider.OpenableColumns.DISPLAY_NAME;
+                    try (android.database.Cursor cursor = getContentResolver().query(uri, new String[]{column}, null, null, null)) {
+                        if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) name = cursor.getString(0);
+                    }
+                    JSONObject file = new JSONObject().put("name", name).put("text", text);
+                    runOnUiThread(() -> complete(screen, proxy, id, file, null));
+                } catch (Exception e) {
+                    runOnUiThread(() -> complete(screen, proxy, id, null, "Choose a UTF-8 text file up to 4 MiB."));
+                }
+            });
+            return;
+        }
         if (request == PICK_PHOTO || request == TAKE_PHOTO) {
             if (screen == null || result != RESULT_OK || (uri == null && request == PICK_PHOTO)
                     || (cameraFile == null && request == TAKE_PHOTO)) {
@@ -878,6 +913,8 @@ public final class MainActivity extends ComponentActivity {
         byte[] photo;
         JavaScriptReplyProxy photoReply;
         String photoId;
+        JavaScriptReplyProxy textReply;
+        String textId;
 
         WebScreen(PageFeed.Page page, Route route, PageFeed.Catalog catalog) {
             this.page = page;

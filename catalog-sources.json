@@ -5,5 +5,12 @@
     "repository": "Ratslayer/calorie-watcher",
     "ref": "main",
     "private": true
+  },
+  {
+    "id": "language",
+    "title": "Language Reader",
+    "repository": "Ratslayer/language",
+    "ref": "main",
+    "private": false
   }
 ]
