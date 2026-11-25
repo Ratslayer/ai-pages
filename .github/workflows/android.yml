@@ -53,7 +53,7 @@ jobs:
           export AI_PAGES_ANDROID_KEYSTORE="$temp/ai-pages.p12"
           printf '%s' "${SIGNING_SECRET#*$'\n'}" | base64 --decode > "$AI_PAGES_ANDROID_KEYSTORE"
           unset SIGNING_SECRET
-          gradle --no-daemon lintDebug assembleDebug
+          gradle --no-daemon testDebugUnitTest lintDebug assembleDebug
           printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:

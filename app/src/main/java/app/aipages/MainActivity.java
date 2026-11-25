@@ -494,7 +494,11 @@ public final class MainActivity extends ComponentActivity {
                 }
                 case "text.pick" -> {
                     if (screen.busy) throw new IOException("Finish the current action first.");
-                    startActivityForResult(document(Intent.ACTION_OPEN_DOCUMENT, "text/plain"), PICK_TEXT);
+                    screen.includePdf = request.optBoolean("includePdf", false);
+                    Intent picker = document(Intent.ACTION_OPEN_DOCUMENT, screen.includePdf ? "*/*" : "text/plain");
+                    if (screen.includePdf) picker.putExtra(Intent.EXTRA_MIME_TYPES,
+                            new String[]{"text/plain", "application/pdf"});
+                    startActivityForResult(picker, PICK_TEXT);
                     screen.textReply = proxy;
                     screen.textId = id;
                     screen.busy = true;
@@ -658,17 +662,25 @@ public final class MainActivity extends ComponentActivity {
             }
             worker.execute(() -> {
                 try (InputStream input = getContentResolver().openInputStream(uri)) {
-                    byte[] bytes = PageFeed.read(input, 4 * 1024 * 1024);
-                    String text = StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString();
                     String name = "Text file";
                     String column = android.provider.OpenableColumns.DISPLAY_NAME;
                     try (android.database.Cursor cursor = getContentResolver().query(uri, new String[]{column}, null, null, null)) {
                         if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) name = cursor.getString(0);
                     }
+                    boolean pdf = screen.includePdf && ("application/pdf".equals(getContentResolver().getType(uri))
+                            || name.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf"));
+                    String text;
+                    if (pdf) {
+                        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(getApplicationContext());
+                        text = PdfText.extract(PageFeed.read(input, 32 * 1024 * 1024));
+                    } else {
+                        text = StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(
+                                PageFeed.read(input, 4 * 1024 * 1024))).toString();
+                    }
                     JSONObject file = new JSONObject().put("name", name).put("text", text);
                     runOnUiThread(() -> complete(screen, proxy, id, file, null));
                 } catch (Exception e) {
-                    runOnUiThread(() -> complete(screen, proxy, id, null, "Choose a UTF-8 text file up to 4 MiB."));
+                    runOnUiThread(() -> complete(screen, proxy, id, null, message(e, "Could not read this document.")));
                 }
             });
             return;
@@ -915,6 +927,7 @@ public final class MainActivity extends ComponentActivity {
         String photoId;
         JavaScriptReplyProxy textReply;
         String textId;
+        boolean includePdf;
 
         WebScreen(PageFeed.Page page, Route route, PageFeed.Catalog catalog) {
             this.page = page;
