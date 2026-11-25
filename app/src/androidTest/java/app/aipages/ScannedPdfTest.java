@@ -26,11 +26,14 @@ public class ScannedPdfTest {
         ink.setTextSize(58);
         new Canvas(scan).drawText("Der Garten ist grün.", 35, 125, ink);
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        try (PdfDocument doc = new PdfDocument()) {
+        PdfDocument doc = new PdfDocument();
+        try {
             PdfDocument.Page page = doc.startPage(new PdfDocument.PageInfo.Builder(480, 120, 1).create());
             page.getCanvas().drawBitmap(scan, null, new Rect(0, 0, 480, 120), null);
             doc.finishPage(page);
             doc.writeTo(output);
+        } finally {
+            doc.close();
         }
         scan.recycle();
         byte[] pdf = output.toByteArray();
