@@ -13,8 +13,8 @@ android {
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         minSdk 28
         targetSdk 36
-        versionCode 10
-        versionName '0.2.3'
+        versionCode 11
+        versionName '0.2.4'
     }
     if (updateKeystore) {
         signingConfigs {
@@ -47,6 +47,7 @@ dependencies {
     implementation 'androidx.core:core:1.15.0'
     implementation 'androidx.activity:activity:1.10.1'
     implementation 'androidx.browser:browser:1.9.0'
+    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.2.0'
     implementation 'androidx.webkit:webkit:1.12.1'
 }
 

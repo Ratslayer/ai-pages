@@ -35,6 +35,7 @@ import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
 import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.core.content.FileProvider;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
@@ -486,7 +487,19 @@ public final class MainActivity extends ComponentActivity {
             addButton(bar, "Recovery", this::showRecovery);
         }
         layout.addView(bar);
-        layout.addView(view, new LinearLayout.LayoutParams(-1, 0, 1));
+        View content = view;
+        if (destination == Route.HOME) {
+            SwipeRefreshLayout refresh = new SwipeRefreshLayout(this);
+            screen.catalogRefresh = refresh;
+            refresh.addView(view);
+            refresh.setColorSchemeColors(Color.rgb(36, 97, 69));
+            refresh.setOnChildScrollUpCallback((parent, child) -> view.canScrollVertically(-1));
+            refresh.setEnabled(!signingIn);
+            refresh.setRefreshing(updating);
+            refresh.setOnRefreshListener(() -> update(feed::refresh));
+            content = refresh;
+        }
+        layout.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(layout);
         view.loadUrl(screen.origin + "/index.html");
     }
@@ -905,7 +918,11 @@ public final class MainActivity extends ComponentActivity {
         if (updating) return;
         updating = true;
         status = "Working…";
-        renderLauncher();
+        if (activePage != null && activePage.catalogRefresh != null) {
+            activePage.catalogRefresh.setRefreshing(true);
+        } else {
+            renderLauncher();
+        }
         worker.execute(() -> {
             String result;
             try {
@@ -918,6 +935,10 @@ public final class MainActivity extends ComponentActivity {
                 if (isDestroyed()) return;
                 updating = false;
                 status = done;
+                if (activePage != null && activePage.catalogRefresh != null) {
+                    activePage.catalogRefresh.setRefreshing(false);
+                    toast(done);
+                }
                 renderLauncher();
             });
         });
@@ -982,6 +1003,7 @@ public final class MainActivity extends ComponentActivity {
         final SharedPreferences data;
         final String host;
         final String origin;
+        SwipeRefreshLayout catalogRefresh;
         boolean busy;
         byte[] photo;
         JavaScriptReplyProxy photoReply;
