@@ -77,6 +77,7 @@ public final class MainActivity extends ComponentActivity {
     private String status = "";
     private Route route = Route.HOME;
     private WebScreen activePage;
+    private Uri incomingPdf;
     private File cameraFile;
     private final OnBackPressedCallback backToHome = new OnBackPressedCallback(false) {
         @Override public void handleOnBackPressed() {
@@ -102,6 +103,7 @@ public final class MainActivity extends ComponentActivity {
             setIntent(new Intent(this, MainActivity.class));
             status = "This sign-in attempt ended. Start sign-in again.";
         }
+        acceptPdfIntent(getIntent());
         PageFeed.Catalog catalog = renderLauncher();
         if ((catalog == null || catalog.home() == null) && !feed.hasKeyWarning()) {
             update(feed::refresh);
@@ -139,6 +141,12 @@ public final class MainActivity extends ComponentActivity {
             catalog = feed.cachedCatalog();
         } catch (Exception ignored) {
             // Keep the native update controls available if the cache cannot be read.
+        }
+        if (incomingPdf != null && catalog != null && !feed.hasKeyWarning()
+                && catalog.pages().get("language") != null && route == Route.HOME
+                && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            openTool(catalog.pages().get("language"));
+            return catalog;
         }
         if (catalog != null && route != Route.RECOVERY && !feed.hasKeyWarning()) {
             PageFeed.Page page = route == Route.HOME ? catalog.home() : catalog.settings();
@@ -318,8 +326,22 @@ public final class MainActivity extends ComponentActivity {
         return bitmap;
     }
 
+    private boolean acceptPdfIntent(Intent intent) {
+        Uri uri = intent.getData();
+        if (!Intent.ACTION_VIEW.equals(intent.getAction()) || uri == null
+                || !"content".equals(uri.getScheme()) || !"application/pdf".equals(intent.getType())
+                || (getPackageName() + ".photos").equals(uri.getAuthority())) return false;
+        incomingPdf = uri;
+        return true;
+    }
+
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (acceptPdfIntent(intent)) {
+            setIntent(intent);
+            showHome();
+            return;
+        }
         if (!FINISH_SIGN_IN.equals(intent.getAction()) || pendingSignIn == null || signInActionId == null
                 || !signInActionId.equals(intent.getStringExtra(SIGN_IN_ACTION_ID))) {
             return;
@@ -492,12 +514,23 @@ public final class MainActivity extends ComponentActivity {
                     if (screen.busy) throw new IOException("Finish the current action first.");
                     pickPhoto(screen, proxy, id);
                 }
+                case "text.incoming" -> {
+                    if (incomingPdf == null || !"language".equals(screen.page.id())) {
+                        reply(proxy, id, null, null);
+                        return;
+                    }
+                    if (screen.busy) throw new IOException("Finish the current action first.");
+                    Uri uri = incomingPdf;
+                    incomingPdf = null;
+                    setIntent(new Intent(this, MainActivity.class));
+                    screen.busy = true;
+                    readDocument(screen, proxy, id, uri, true, request.optString("language", "en"));
+                }
                 case "text.pick" -> {
                     if (screen.busy) throw new IOException("Finish the current action first.");
                     screen.includePdf = request.optBoolean("includePdf", false);
                     Intent picker = document(Intent.ACTION_OPEN_DOCUMENT, screen.includePdf ? "*/*" : "text/plain");
-                    if (screen.includePdf) picker.putExtra(Intent.EXTRA_MIME_TYPES,
-                            new String[]{"text/plain", "application/pdf"});
+                    screen.language = request.optString("language", "en");
                     startActivityForResult(picker, PICK_TEXT);
                     screen.textReply = proxy;
                     screen.textId = id;
@@ -660,29 +693,7 @@ public final class MainActivity extends ComponentActivity {
                 complete(screen, proxy, id, null, null);
                 return;
             }
-            worker.execute(() -> {
-                try (InputStream input = getContentResolver().openInputStream(uri)) {
-                    String name = "Text file";
-                    String column = android.provider.OpenableColumns.DISPLAY_NAME;
-                    try (android.database.Cursor cursor = getContentResolver().query(uri, new String[]{column}, null, null, null)) {
-                        if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) name = cursor.getString(0);
-                    }
-                    boolean pdf = screen.includePdf && ("application/pdf".equals(getContentResolver().getType(uri))
-                            || name.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf"));
-                    String text;
-                    if (pdf) {
-                        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(getApplicationContext());
-                        text = PdfText.extract(PageFeed.read(input, 32 * 1024 * 1024));
-                    } else {
-                        text = StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(
-                                PageFeed.read(input, 4 * 1024 * 1024))).toString();
-                    }
-                    JSONObject file = new JSONObject().put("name", name).put("text", text);
-                    runOnUiThread(() -> complete(screen, proxy, id, file, null));
-                } catch (Exception e) {
-                    runOnUiThread(() -> complete(screen, proxy, id, null, message(e, "Could not read this document.")));
-                }
-            });
+            readDocument(screen, proxy, id, uri, screen.includePdf, screen.language);
             return;
         }
         if (request == PICK_PHOTO || request == TAKE_PHOTO) {
@@ -714,6 +725,56 @@ public final class MainActivity extends ComponentActivity {
             }
             worker.execute(() -> transfer(screen, request, uri));
         }
+    }
+
+    private void readDocument(WebScreen screen, JavaScriptReplyProxy proxy, String id, Uri uri,
+                              boolean allowPdf, String language) {
+        java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Opening document")
+                .setMessage("Reading the file…").setNegativeButton("Cancel", (d, which) -> cancelled.set(true))
+                .setOnCancelListener(d -> cancelled.set(true)).show();
+        worker.execute(() -> {
+            try (java.io.BufferedInputStream input = new java.io.BufferedInputStream(java.util.Objects.requireNonNull(getContentResolver().openInputStream(uri)))) {
+                String name = "Text file";
+                String column = android.provider.OpenableColumns.DISPLAY_NAME;
+                try (android.database.Cursor cursor = getContentResolver().query(uri, new String[]{column}, null, null, null)) {
+                    if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) name = cursor.getString(0);
+                }
+                input.mark(1024);
+                byte[] header = new byte[1024];
+                int headerSize = input.read(header);
+                input.reset();
+                boolean pdf = allowPdf && (new String(header, 0, Math.max(0, headerSize), StandardCharsets.ISO_8859_1).contains("%PDF-")
+                        || "application/pdf".equals(getContentResolver().getType(uri))
+                        || name.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf"));
+                String text;
+                if (pdf) {
+                    com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(getApplicationContext());
+                    byte[] bytes = PageFeed.read(input, 32 * 1024 * 1024);
+                    try (PdfOcr ocr = new PdfOcr(this, language, bytes)) {
+                        text = PdfText.extract(bytes, (page, total) -> {
+                            if (cancelled.get() || Thread.currentThread().isInterrupted()) {
+                                throw new IOException("Import cancelled.");
+                            }
+                            runOnUiThread(() -> dialog.setMessage("Recognizing page " + (page + 1) + " of " + total + "…"));
+                            return ocr.read(page);
+                        });
+                    }
+                } else {
+                    if (allowPdf && !name.toLowerCase(java.util.Locale.ROOT).endsWith(".txt")
+                            && !"text/plain".equals(getContentResolver().getType(uri))) {
+                        throw new IOException("Choose a PDF or a UTF-8 .txt file.");
+                    }
+                    text = StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(
+                            PageFeed.read(input, 4 * 1024 * 1024))).toString();
+                }
+                if (cancelled.get()) throw new IOException("Import cancelled.");
+                JSONObject file = new JSONObject().put("name", name).put("text", text);
+                runOnUiThread(() -> { dialog.dismiss(); complete(screen, proxy, id, file, null); });
+            } catch (Exception e) {
+                runOnUiThread(() -> { dialog.dismiss(); complete(screen, proxy, id, null, message(e, "Could not read this document.")); });
+            }
+        });
     }
 
     private void backup(WebScreen screen) {
@@ -928,6 +989,7 @@ public final class MainActivity extends ComponentActivity {
         JavaScriptReplyProxy textReply;
         String textId;
         boolean includePdf;
+        String language;
 
         WebScreen(PageFeed.Page page, Route route, PageFeed.Catalog catalog) {
             this.page = page;

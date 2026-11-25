@@ -1,0 +1,31 @@
+name: Reader OCR
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/src/main/java/app/aipages/Pdf*.java'
+      - 'app/src/androidTest/java/app/aipages/ScannedPdfTest.java'
+      - '.github/workflows/reader-ocr.yml'
+permissions:
+  contents: read
+jobs:
+  scanned-pdf:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Enable emulator acceleration
+        run: sudo chmod 666 /dev/kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          script: gradle connectedDebugAndroidTest

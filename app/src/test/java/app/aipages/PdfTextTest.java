@@ -36,13 +36,17 @@ public class PdfTextTest {
     }
 
     @Test public void extractsReadableTextInPageOrder() throws IOException {
-        String text = PdfText.extract(makePdf("Er hörte auf.", "Weiter geht es."));
-        assertEquals("Er hörte auf. Weiter geht es.", text.replaceAll("\\s+", " "));
+        String text = PdfText.extract(makePdf("Er hörte auf.", "", "Weiter geht es."), (page, total) -> {
+            assertEquals(1, page);
+            assertEquals(3, total);
+            return "Ein Scan.";
+        });
+        assertEquals("Er hörte auf. Ein Scan. Weiter geht es.", text.replaceAll("\\s+", " "));
     }
 
-    @Test public void explainsWhenOcrIsNeeded() throws IOException {
+    @Test public void explainsWhenScanHasNoWords() throws IOException {
         byte[] blank = makePdf("");
-        IOException error = assertThrows(IOException.class, () -> PdfText.extract(blank));
-        assertTrue(error.getMessage().contains("OCR"));
+        IOException error = assertThrows(IOException.class, () -> PdfText.extract(blank, (page, total) -> ""));
+        assertTrue(error.getMessage().contains("No readable words"));
     }
 }

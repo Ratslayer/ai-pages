@@ -10,10 +10,11 @@ android {
 
     defaultConfig {
         applicationId 'app.aipages'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         minSdk 28
         targetSdk 36
-        versionCode 9
-        versionName '0.2.2'
+        versionCode 10
+        versionName '0.2.3'
     }
     if (updateKeystore) {
         signingConfigs {
@@ -33,7 +34,10 @@ android {
     }
 }
 dependencies {
+    implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'
     implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.14.1'
     implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
@@ -42,3 +46,23 @@ dependencies {
     implementation 'androidx.browser:browser:1.9.0'
     implementation 'androidx.webkit:webkit:1.12.1'
 }
+
+def ocrAssets = layout.buildDirectory.dir('generated/ocrAssets')
+android.sourceSets.main.assets.srcDir(ocrAssets)
+def prepareOcrModels = tasks.register('prepareOcrModels') {
+    def revision = '87416418657359cb625c412a48b6e1d6d41c29bd'
+    def languages = 'eng deu fra rus spa ita por nld swe pol ukr tur ara heb hin jpn chi_sim kor'.split(' ')
+    inputs.property('revision', revision)
+    inputs.property('languages', languages.join(' '))
+    outputs.dir(ocrAssets)
+    doLast {
+        def dir = new File(ocrAssets.get().asFile, 'ocr')
+        dir.mkdirs()
+        (languages.collect { it + '.traineddata' } + ['LICENSE']).each { name ->
+            def target = new File(dir, name)
+            def source = new URL("https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/${revision}/${name}")
+            source.withInputStream { input -> target.withOutputStream { it << input } }
+        }
+    }
+}
+tasks.named('preBuild').configure { dependsOn prepareOcrModels }
