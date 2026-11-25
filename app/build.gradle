@@ -28,28 +28,15 @@ android {
         }
     }
     testOptions.unitTests.includeAndroidResources = true
+    testOptions.unitTests.all {
+        systemProperty 'robolectric.dependency.repo.url', 'https://maven-central.storage-download.googleapis.com/maven2'
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
 }
-// Resolve Robolectric's SDK jars through Gradle, so CI can reuse its dependency cache.
-configurations {
-    testRuntimeSdk
-    testResourceSdk
-}
-def testSdkDir = layout.buildDirectory.dir('robolectric-sdks')
-def stageTestSdks = tasks.register('stageTestSdks', Sync) {
-    from configurations.testRuntimeSdk, configurations.testResourceSdk
-    into testSdkDir
-}
-tasks.withType(Test).configureEach {
-    dependsOn stageTestSdks
-    systemProperty 'robolectric.dependency.dir', testSdkDir.get().asFile.absolutePath
-}
 dependencies {
-    testRuntimeSdk('org.robolectric:android-all-instrumented:9-robolectric-4913185-2-i7') { transitive = false }
-    testResourceSdk('org.robolectric:android-all-instrumented:15-robolectric-12650502-i7') { transitive = false }
     implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'
     implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'
