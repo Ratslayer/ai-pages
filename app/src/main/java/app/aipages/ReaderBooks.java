@@ -101,12 +101,21 @@ final class ReaderBooks {
         return db.compileStatement("INSERT OR IGNORE INTO entries(sid,payload) VALUES(?,?)");
     }
     JSONObject importFile(InputStream input,String current) throws Exception {
+        return importFile(input,current,null,null,null);
+    }
+    JSONObject importFile(InputStream input,String current,String expectedBook,String expectedLang,String expectedSha) throws Exception {
         Files.createDirectories(root.toPath());
         File tmp=File.createTempFile("import-", ".tmp",root);
         try {
-            try(OutputStream out=Files.newOutputStream(tmp.toPath())){
+            java.security.MessageDigest digest=java.security.MessageDigest.getInstance("SHA-256");
+            try(OutputStream out=new java.security.DigestOutputStream(Files.newOutputStream(tmp.toPath()),digest)){
                 byte[] buf=new byte[32768]; int size=0,n;
                 while((n=input.read(buf))!=-1){size+=n;require(size<=64*1024*1024,"Book pack exceeds 64 MiB.");out.write(buf,0,n);}
+            }
+            if(expectedSha!=null){
+                StringBuilder hex=new StringBuilder();
+                for(byte b:digest.digest())hex.append(String.format(java.util.Locale.ROOT,"%02x",b & 255));
+                require(expectedSha.contentEquals(hex),"Downloaded file checksum differs from the catalogue. Refresh and retry.");
             }
             JSONObject meta;
             try(SQLiteDatabase incoming=read(tmp)) {
@@ -114,11 +123,16 @@ final class ReaderBooks {
                 meta=info(incoming);
                 String id=meta.getString("book"),lang=meta.getString("lang");
                 languageFile(id,lang);
+                if(expectedBook!=null){
+                    require(expectedBook.equals(id),"Book revision differs from catalogue.");
+                    String format=expectedLang==null?"reader.book.1":"reader.translation.1";
+                    require(format.equals(meta.getString("format")) && (expectedLang==null || expectedLang.equals(lang)),"Wrong catalogue file.");
+                }
                 if ("reader.translation.1".equals(meta.getString("format"))) {
                     require(id.equals(current),"Open the matching book before its translation.");
                     table(incoming,"entries");
                     try(SQLiteDatabase book=read(file(id,"")); SQLiteDatabase local=translations(id,lang);
-                        Cursor c=incoming.rawQuery("SELECT sid,payload FROM entries",null); SQLiteStatement stmt=writer(local)) {
+                        Cursor c=incoming.rawQuery("SELECT sid,payload FROM entries",null); SQLiteStatement stmt=expectedSha==null?writer(local):local.compileStatement("INSERT OR REPLACE INTO entries(sid,payload) VALUES(?,?)")) {
                         local.beginTransaction();
                         try {while(c.moveToNext())insert(book,stmt,c.getInt(0),c.getString(1));local.setTransactionSuccessful();}
                         finally{local.endTransaction();}
@@ -139,7 +153,7 @@ final class ReaderBooks {
                 require(last>0,"Book is empty.");meta.put("pages",page+1);
             }
             File dest=file(meta.getString("book"),"");
-            if(!dest.exists())Files.move(tmp.toPath(),dest.toPath(),StandardCopyOption.ATOMIC_MOVE);
+            if(expectedSha!=null || !dest.exists())Files.move(tmp.toPath(),dest.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
             return meta;
         } finally { Files.deleteIfExists(tmp.toPath()); }
     }
@@ -205,6 +219,36 @@ final class ReaderBooks {
         try(SQLiteDatabase db=read(file(book,""))){
             return info(db).put("pages",Integer.parseInt(scalar(db,"SELECT max(page)+1 FROM sentences")));
         }
+    }
+    boolean hasBook(String id) throws IOException { return file(id,"").isFile(); }
+    boolean hasLanguage(String id,String lang) throws IOException { return languageFile(id,lang).isFile(); }
+    java.util.List<String> installed() {
+        java.util.List<String> ids=new java.util.ArrayList<>();
+        String[] names=root.list();
+        if(names!=null)for(String name:names)if(name.matches("[a-f0-9]{64}\\.book\\.sqlite"))ids.add(name.substring(0,64));
+        java.util.Collections.sort(ids);
+        return ids;
+    }
+    java.util.Set<Integer> readyPages(String id,String lang) throws Exception {
+        java.util.Set<Integer> ready=new java.util.HashSet<>();
+        if(!hasLanguage(id,lang))return ready;
+        try(SQLiteDatabase source=read(file(id,"")); SQLiteDatabase pack=read(file(id,lang));
+            Cursor sentences=source.rawQuery("SELECT id,page FROM sentences ORDER BY id",null);
+            Cursor entries=pack.rawQuery("SELECT sid FROM entries ORDER BY sid",null)){
+            boolean hasEntry=entries.moveToFirst(), complete=true;
+            int page=-1;
+            while(sentences.moveToNext()){
+                int next=sentences.getInt(1),sid=sentences.getInt(0);
+                if(next!=page){
+                    if(page>=0 && complete)ready.add(page);
+                    page=next;complete=true;
+                }
+                while(hasEntry && entries.getInt(0)<sid)hasEntry=entries.moveToNext();
+                if(!hasEntry || entries.getInt(0)!=sid)complete=false;
+            }
+            if(page>=0 && complete)ready.add(page);
+        }
+        return ready;
     }
     JSONArray page(String book,String lang,int page) throws Exception {
         File trans=languageFile(book,lang);
