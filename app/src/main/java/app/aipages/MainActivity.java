@@ -70,6 +70,7 @@ public final class MainActivity extends ComponentActivity {
     private final ExecutorService authWorker = Executors.newSingleThreadExecutor();
     private final ExecutorService bookIO = Executors.newSingleThreadExecutor();
     private ReaderBooks books;
+    private BookCatalogue bookCatalogue;
     private PageFeed feed;
     private ChatGpt chat;
     private ChatGpt.SignIn pendingSignIn;
@@ -84,7 +85,9 @@ public final class MainActivity extends ComponentActivity {
     private File cameraFile;
     private final OnBackPressedCallback backToHome = new OnBackPressedCallback(false) {
         @Override public void handleOnBackPressed() {
-            if (activePage == null || !activePage.busy) showHome();
+            if (activePage != null && activePage.readerCatalogue && !activePage.onBookshelf && !activePage.busy) {
+                activePage.view.evaluateJavascript("window.dispatchEvent(new Event('reader-books'))",null);
+            } else if (activePage == null || !activePage.busy) showHome();
         }
     };
 
@@ -100,6 +103,7 @@ public final class MainActivity extends ComponentActivity {
         }
         if (saved == null) new File(getCacheDir(), "meal-photos/meal.jpg").delete();
         books = new ReaderBooks(new File(getFilesDir(), "language-books"));
+        bookCatalogue = new BookCatalogue(books,getSharedPreferences("language-catalogue",MODE_PRIVATE),BookCatalogue::drive);
         feed = new PageFeed(this);
         chat = new ChatGpt(this);
         if (FINISH_SIGN_IN.equals(getIntent().getAction())) {
@@ -491,15 +495,20 @@ public final class MainActivity extends ComponentActivity {
         }
         layout.addView(bar);
         View content = view;
-        if (destination == Route.HOME) {
+        boolean reader = destination == Route.TOOL && "language".equals(page.id());
+        if (destination == Route.HOME || reader) {
             SwipeRefreshLayout refresh = new SwipeRefreshLayout(this);
-            screen.catalogRefresh = refresh;
+            if(reader)screen.readerRefresh=refresh;
+            else screen.catalogRefresh = refresh;
             refresh.addView(view);
             refresh.setColorSchemeColors(Color.rgb(36, 97, 69));
             refresh.setOnChildScrollUpCallback((parent, child) -> view.canScrollVertically(-1));
-            refresh.setEnabled(!signingIn);
-            refresh.setRefreshing(updating);
-            refresh.setOnRefreshListener(() -> update(feed::refresh));
+            refresh.setEnabled(!reader && !signingIn);
+            refresh.setRefreshing(!reader && updating);
+            refresh.setOnRefreshListener(() -> {
+                if(reader) view.evaluateJavascript("window.dispatchEvent(new Event('reader-refresh'))",null);
+                else update(feed::refresh);
+            });
             content = refresh;
         }
         layout.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -578,6 +587,13 @@ public final class MainActivity extends ComponentActivity {
 
     private void handleBook(WebScreen screen, JavaScriptReplyProxy proxy, String id, String method, JSONObject args) throws Exception {
         if ("book.available".equals(method)) { reply(proxy,id,true,null); return; }
+        if ("book.shelfMode".equals(method)) {
+            screen.readerCatalogue = true;
+            screen.onBookshelf = args.optBoolean("visible");
+            screen.readerRefresh.setEnabled(screen.onBookshelf);
+            screen.readerRefresh.setRefreshing(screen.onBookshelf && args.optBoolean("refreshing"));
+            reply(proxy,id,true,null);return;
+        }
         if ("book.pick".equals(method) || "book.export".equals(method)) {
             if(screen.busy)throw new IOException("Finish the current action first.");
             boolean picking = "book.pick".equals(method);
@@ -590,9 +606,11 @@ public final class MainActivity extends ComponentActivity {
         }
         bookIO.execute(() -> {
             try {
-                String book=args.getString("book");
+                String book=args.optString("book");
                 Object value;
                 switch(method) {
+                    case "book.shelf" -> value=bookCatalogue.shelf(args.has("source")?args.getString("source"):null,args.optBoolean("refresh"));
+                    case "book.download" -> value=bookCatalogue.open(args.getString("slug"));
                     case "book.info" -> value=books.describe(book);
                     case "book.page" -> value=books.page(book,args.getString("lang"),args.getInt("page"));
                     case "book.save" -> {
@@ -1077,6 +1095,9 @@ public final class MainActivity extends ComponentActivity {
         final String host;
         final String origin;
         SwipeRefreshLayout catalogRefresh;
+        SwipeRefreshLayout readerRefresh;
+        boolean readerCatalogue;
+        boolean onBookshelf;
         boolean busy;
         byte[] photo;
         JavaScriptReplyProxy photoReply;
