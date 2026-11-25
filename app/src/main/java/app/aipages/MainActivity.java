@@ -58,7 +58,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends ComponentActivity {
-    private static final int PICK_PHOTO = 1, TAKE_PHOTO = 2, EXPORT = 3, IMPORT = 4, IMPORT_CATALOG = 5, PICK_TEXT = 6;
+    private static final int PICK_PHOTO = 1, TAKE_PHOTO = 2, EXPORT = 3, IMPORT = 4, IMPORT_CATALOG = 5, PICK_TEXT = 6, PICK_BOOK = 7, EXPORT_BOOK = 8;
     private static final int MAX_DATA = 350_000;
     private static final String FINISH_SIGN_IN = "app.aipages.FINISH_SIGN_IN";
     private static final String SIGN_IN_ACTION_ID = "app.aipages.SIGN_IN_ACTION_ID";
@@ -68,6 +68,8 @@ public final class MainActivity extends ComponentActivity {
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final ExecutorService authWorker = Executors.newSingleThreadExecutor();
+    private final ExecutorService bookIO = Executors.newSingleThreadExecutor();
+    private ReaderBooks books;
     private PageFeed feed;
     private ChatGpt chat;
     private ChatGpt.SignIn pendingSignIn;
@@ -97,6 +99,7 @@ public final class MainActivity extends ComponentActivity {
             });
         }
         if (saved == null) new File(getCacheDir(), "meal-photos/meal.jpg").delete();
+        books = new ReaderBooks(new File(getFilesDir(), "language-books"));
         feed = new PageFeed(this);
         chat = new ChatGpt(this);
         if (FINISH_SIGN_IN.equals(getIntent().getAction())) {
@@ -515,7 +518,12 @@ public final class MainActivity extends ComponentActivity {
                 onLauncherMessage(screen, request, proxy, id);
                 return;
             }
-            switch (request.getString("method")) {
+            String method = request.getString("method");
+            if (method.startsWith("book.") && "language".equals(screen.page.id())) {
+                handleBook(screen, proxy, id, method, request);
+                return;
+            }
+            switch (method) {
                 case "storage.read" -> reply(proxy, id, screen.data.getString("state", null), null);
                 case "storage.write" -> {
                     if (screen.busy) throw new IOException("Finish the current action first.");
@@ -537,10 +545,12 @@ public final class MainActivity extends ComponentActivity {
                     incomingPdf = null;
                     setIntent(new Intent(this, MainActivity.class));
                     screen.busy = true;
+                    screen.asBook = request.optBoolean("asBook");
                     readDocument(screen, proxy, id, uri, true, request.optString("language", "en"));
                 }
                 case "text.pick" -> {
                     if (screen.busy) throw new IOException("Finish the current action first.");
+                    screen.asBook = "language".equals(screen.page.id()) && request.optBoolean("asBook");
                     screen.includePdf = request.optBoolean("includePdf", false);
                     Intent picker = document(Intent.ACTION_OPEN_DOCUMENT, screen.includePdf ? "*/*" : "text/plain");
                     screen.language = request.optString("language", "en");
@@ -564,6 +574,36 @@ public final class MainActivity extends ComponentActivity {
         } catch (Exception e) {
             reply(proxy, id, null, message(e, "Could not complete the action."));
         }
+    }
+
+    private void handleBook(WebScreen screen, JavaScriptReplyProxy proxy, String id, String method, JSONObject args) throws Exception {
+        if ("book.available".equals(method)) { reply(proxy,id,true,null); return; }
+        if ("book.pick".equals(method) || "book.export".equals(method)) {
+            if(screen.busy)throw new IOException("Finish the current action first.");
+            boolean picking = "book.pick".equals(method);
+            String lang=args.optString("lang");
+            Intent intent=picking ? document(Intent.ACTION_OPEN_DOCUMENT,"*/*") :
+                    document(Intent.ACTION_CREATE_DOCUMENT,"application/vnd.sqlite3").putExtra(Intent.EXTRA_TITLE,lang.isEmpty()?"book.sqlite":lang+".sqlite");
+            startActivityForResult(intent,picking?PICK_BOOK:EXPORT_BOOK);
+            screen.textReply=proxy;screen.textId=id;screen.packArgs=args;screen.busy=true;
+            return;
+        }
+        bookIO.execute(() -> {
+            try {
+                String book=args.getString("book");
+                Object value;
+                switch(method) {
+                    case "book.info" -> value=books.describe(book);
+                    case "book.page" -> value=books.page(book,args.getString("lang"),args.getInt("page"));
+                    case "book.save" -> {
+                        books.save(book,args.getString("lang"),args.getInt("sid"),args.getJSONObject("entry"));
+                        value=true;
+                    }
+                    default -> throw new IOException("Unsupported book action.");
+                }
+                runOnUiThread(() -> { if(activePage==screen)reply(proxy,id,value,null); });
+            } catch(Exception e){runOnUiThread(() -> { if(activePage==screen)reply(proxy,id,null,message(e,"Could not read the book.")); });}
+        });
     }
 
     private void onLauncherMessage(WebScreen screen, JSONObject request, JavaScriptReplyProxy proxy, String id)
@@ -698,6 +738,36 @@ public final class MainActivity extends ComponentActivity {
             return;
         }
         WebScreen screen = route == Route.TOOL ? activePage : null;
+        if (request == PICK_BOOK || request == EXPORT_BOOK) {
+            if(screen==null || screen.textReply==null || screen.packArgs==null)return;
+            JavaScriptReplyProxy proxy=screen.textReply;String id=screen.textId;JSONObject args=screen.packArgs;
+            screen.textReply=null;screen.textId=null;screen.packArgs=null;
+            if(result!=RESULT_OK || uri==null){complete(screen,proxy,id,null,null);return;}
+            bookIO.execute(() -> {
+                try {
+                    Object value;
+                    if(request==PICK_BOOK){
+                        try(InputStream in=getContentResolver().openInputStream(uri)){
+                            if(in==null)throw new IOException("Could not open document.");
+                            value=books.importFile(in,args.optString("book"));
+                        }
+                    }else{
+                        // Export to a fresh document. A provider may truncate an existing file
+                        // before a failed or interrupted stream can be recovered.
+                        try(InputStream existing=getContentResolver().openInputStream(uri)){
+                            if(existing!=null && existing.read()!=-1)throw new IOException("Choose a new filename to keep the existing snapshot readable.");
+                        }
+                        try(OutputStream out=getContentResolver().openOutputStream(uri,"wt")){
+                            if(out==null)throw new IOException("Could not create export.");
+                            books.export(args.getString("book"),args.optString("lang"),out);
+                        }
+                        value=true;
+                    }
+                    runOnUiThread(() -> complete(screen,proxy,id,value,null));
+                } catch(Exception e){runOnUiThread(() -> complete(screen,proxy,id,null,message(e,"Could not transfer the book file.")));}
+            });
+            return;
+        }
         if (request == PICK_TEXT) {
             if (screen == null || screen.textReply == null) return;
             JavaScriptReplyProxy proxy = screen.textReply;
@@ -773,7 +843,7 @@ public final class MainActivity extends ComponentActivity {
                             }
                             runOnUiThread(() -> dialog.setMessage("Recognizing page " + (page + 1) + " of " + total + "…"));
                             return ocr.read(page);
-                        });
+                        }, screen.asBook ? "\f" : "\n\n");
                     }
                 } else {
                     if (allowPdf && !name.toLowerCase(java.util.Locale.ROOT).endsWith(".txt")
@@ -784,7 +854,7 @@ public final class MainActivity extends ComponentActivity {
                             PageFeed.read(input, 4 * 1024 * 1024))).toString();
                 }
                 if (cancelled.get()) throw new IOException("Import cancelled.");
-                JSONObject file = new JSONObject().put("name", name).put("text", text);
+                JSONObject file = screen.asBook ? books.fromText(name, language, text) : new JSONObject().put("name", name).put("text", text);
                 runOnUiThread(() -> { dialog.dismiss(); complete(screen, proxy, id, file, null); });
             } catch (Exception e) {
                 runOnUiThread(() -> { dialog.dismiss(); complete(screen, proxy, id, null, message(e, "Could not read this document.")); });
@@ -994,6 +1064,7 @@ public final class MainActivity extends ComponentActivity {
         deleteCameraFile();
         authWorker.shutdownNow();
         worker.shutdownNow();
+        bookIO.shutdown();
         super.onDestroy();
     }
 
@@ -1012,6 +1083,8 @@ public final class MainActivity extends ComponentActivity {
         String photoId;
         JavaScriptReplyProxy textReply;
         String textId;
+        boolean asBook;
+        JSONObject packArgs;
         boolean includePdf;
         String language;
 

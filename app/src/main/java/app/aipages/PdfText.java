@@ -13,6 +13,10 @@ final class PdfText {
     }
 
     static String extract(byte[] bytes, PageOcr ocr) throws IOException {
+        return extract(bytes, ocr, "\n\n").trim();
+    }
+
+    static String extract(byte[] bytes, PageOcr ocr, String pageEnd) throws IOException {
         try (PDDocument document = PDDocument.load(bytes)) {
             if (!document.getCurrentAccessPermission().canExtractContent()) {
                 throw new IOException("This PDF restricts text extraction.");
@@ -37,8 +41,8 @@ final class PdfText {
                     String recognized = ocr.read(nextPage++, total);
                     if (recognized != null && !recognized.trim().isEmpty()) {
                         sink.write(recognized.trim());
-                        sink.write("\n\n");
                     }
+                    sink.write(pageEnd);
                 }
 
                 @Override public void processPage(com.tom_roush.pdfbox.pdmodel.PDPage page) throws IOException {
@@ -58,11 +62,11 @@ final class PdfText {
             stripper.setSortByPosition(true);
             stripper.setLineSeparator(" ");
             stripper.setParagraphEnd("\n");
-            stripper.setPageEnd("\n\n");
+            stripper.setPageEnd(pageEnd);
             stripper.writeText(document, sink);
             while (stripper.nextPage < total) stripper.appendScan();
-            String result = text.toString().trim();
-            if (result.isEmpty()) throw new IOException("No readable words were found. Check the scan quality and the reading language.");
+            String result = text.toString();
+            if (result.trim().isEmpty()) throw new IOException("No readable words were found. Check the scan quality and the reading language.");
             return result;
         } catch (InvalidPasswordException e) {
             throw new IOException("Unlock this PDF before opening it in the reader.", e);

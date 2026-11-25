@@ -7,6 +7,7 @@ on:
     paths:
       - 'shell/**'
       - 'catalog-sources.json'
+      - 'app/src/main/java/app/aipages/ReaderBooks.java'
 
 permissions:
   contents: read
