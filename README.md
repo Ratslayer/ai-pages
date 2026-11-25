@@ -58,7 +58,7 @@ A verified tool supplies `index.html`, `app.js`, and `style.css`. The shell serv
 | `storage.write` | Takes a `value` string containing a JSON object and saves it locally. |
 | `text.pick` | Opens a UTF-8 file. Pass `includePdf: true` on Android 0.2.2+ to also accept selectable-text PDFs. Returns `{name, text}` or `null` on cancellation. |
 | `photos.pick` | Opens the Android library or camera and returns whether a photo was selected. |
-| `ai.run` | Takes a `prompt` and optional `image: true`. Asks for approval and returns text from the completed response. |
+| `ai.run` | Takes a `prompt` and optional `image: true`. Runs text prompts immediately and asks for confirmation when attaching a photo. Returns the completed response text. |
 
 ## Build
 

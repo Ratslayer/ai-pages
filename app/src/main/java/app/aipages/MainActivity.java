@@ -557,7 +557,7 @@ public final class MainActivity extends ComponentActivity {
                     byte[] photo = request.optBoolean("image") ? screen.photo : null;
                     if (request.optBoolean("image") && photo == null) throw new IOException("Choose a photo first.");
                     boolean fastText = "fast-text".equals(request.optString("profile")) && photo == null;
-                    confirmRun(screen, proxy, id, prompt, photo, fastText);
+                    runPrompt(screen, proxy, id, prompt, photo, fastText);
                 }
                 default -> throw new IOException("Unsupported tool action.");
             }
@@ -636,23 +636,25 @@ public final class MainActivity extends ComponentActivity {
         reply(proxy, id, true, null);
     }
 
-    private void confirmRun(WebScreen screen, JavaScriptReplyProxy proxy, String id, String prompt, byte[] photo, boolean fastText) {
+    private void runPrompt(WebScreen screen, JavaScriptReplyProxy proxy, String id, String prompt, byte[] photo, boolean fastText) {
         screen.busy = true;
-        Runnable cancel = () -> {
-            screen.busy = false;
-            reply(proxy, id, null, "Request canceled.");
-        };
-        new AlertDialog.Builder(this).setTitle("Send to ChatGPT?")
-                .setMessage(screen.page.title() + (photo == null ? " will send a prompt." : " will send the selected photo and a prompt."))
+        Runnable send = () -> worker.execute(() -> {
+            try {
+                String output = chat.run(prompt, photo, fastText);
+                runOnUiThread(() -> complete(screen, proxy, id, output, null));
+            } catch (Exception e) {
+                runOnUiThread(() -> complete(screen, proxy, id, null, message(e, "ChatGPT request failed.")));
+            }
+        });
+        if (photo == null) {
+            send.run();
+            return;
+        }
+        Runnable cancel = () -> complete(screen, proxy, id, null, "Request canceled.");
+        new AlertDialog.Builder(this).setTitle("Send photo to ChatGPT?")
+                .setMessage(screen.page.title() + " will send the selected photo and a prompt.")
                 .setNegativeButton("Cancel", (dialog, button) -> cancel.run()).setOnCancelListener(d -> cancel.run())
-                .setPositiveButton("Send", (dialog, button) -> worker.execute(() -> {
-                    try {
-                        String output = chat.run(prompt, photo, fastText);
-                        runOnUiThread(() -> complete(screen, proxy, id, output, null));
-                    } catch (Exception e) {
-                        runOnUiThread(() -> complete(screen, proxy, id, null, message(e, "ChatGPT request failed.")));
-                    }
-                })).show();
+                .setPositiveButton("Send", (dialog, button) -> send.run()).show();
     }
 
     private void pickPhoto(WebScreen screen, JavaScriptReplyProxy proxy, String id) {
