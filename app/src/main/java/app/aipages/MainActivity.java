@@ -613,17 +613,16 @@ public final class MainActivity extends ComponentActivity {
                 return;
             }
             if (screen.busy) throw new IOException("Finish the current action first.");
-            String path = args.getString("path");
             screen.busy = true;
             fileIO.execute(() -> {
                 try {
-                    importFile(screen, path, uri);
+                    Object value = receiveFile(screen, args, uri);
                     runOnUiThread(() -> {
                         if (activePage == screen && incomingPdf == uri) {
                             incomingPdf = null;
                             setIntent(new Intent(this, MainActivity.class));
                         }
-                        complete(screen, proxy, id, true, null);
+                        complete(screen, proxy, id, value, null);
                     });
                 } catch (Exception e) {
                     runOnUiThread(() -> complete(screen, proxy, id, null, message(e, "Could not open document.")));
@@ -644,7 +643,10 @@ public final class MainActivity extends ComponentActivity {
         fileIO.execute(() -> {
             try {
                 StorageUpgrade.run(this);
-                Object value=screen.files.perform(method,args);
+                Object value = switch (method) {
+                    case "files.linkSize", "files.linkRead", "files.unlink" -> screen.links.perform(method,args);
+                    default -> screen.files.perform(method,args);
+                };
                 runOnUiThread(() -> { if(activePage==screen) reply(proxy,id,value,null); });
             } catch(Exception e){
                 runOnUiThread(() -> { if(activePage==screen) reply(proxy,id,null,message(e,"File operation failed.")); });
@@ -770,6 +772,15 @@ public final class MainActivity extends ComponentActivity {
                 }).setOnCancelListener(dialog -> finishPhoto(screen, false, null)).show();
     }
 
+    private Object receiveFile(WebScreen screen, JSONObject args, Uri uri) throws Exception {
+        if (args.optBoolean("preferOriginal")) {
+            JSONObject link = screen.links.link(uri);
+            if (link != null) return link;
+        }
+        importFile(screen, args.getString("path"), uri);
+        return true;
+    }
+
     private void importFile(WebScreen screen, String path, Uri uri) throws IOException {
         try (InputStream input = getContentResolver().openInputStream(uri)) {
             if (input == null) throw new IOException("Could not open document.");
@@ -801,8 +812,7 @@ public final class MainActivity extends ComponentActivity {
                     Object value;
                     StorageUpgrade.run(this);
                     if(request==PICK_FILE){
-                        importFile(screen, args.getString("path"), uri);
-                        value=true;
+                        value=receiveFile(screen,args,uri);
                     }else{
                         // Export to a fresh document. A provider may truncate an existing file
                         // before a failed or interrupted stream can be recovered.
@@ -1138,6 +1148,7 @@ public final class MainActivity extends ComponentActivity {
         SwipeRefreshLayout toolRefresh;
         boolean handlesBack;
         final ToolFiles files;
+        final DocumentLinks links;
         boolean busy;
         byte[] photo;
         JavaScriptReplyProxy photoReply;
@@ -1154,6 +1165,7 @@ public final class MainActivity extends ComponentActivity {
             this.page = page;
             this.route = route;
             this.catalog = catalog;
+            links = route == Route.TOOL ? new DocumentLinks(MainActivity.this,page.id()) : null;
             files = route == Route.TOOL ? new ToolFiles(new File(getFilesDir(),"tools/" + page.id())) : null;
             data = route == Route.TOOL ? getSharedPreferences("tool-" + page.id(), MODE_PRIVATE) : null;
             host = page.id() + (route == Route.TOOL ? ".ai-pages.invalid" : ".shell.ai-pages.invalid");
