@@ -20,7 +20,7 @@
     "id": "reader",
     "title": "PDF Reader",
     "repository": "Ratslayer/reader",
-    "ref": "main",
+    "ref": "refs/heads/main",
     "private": false,
     "accepts": [
       "application/pdf"
