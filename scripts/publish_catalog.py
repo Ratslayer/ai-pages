@@ -15,7 +15,8 @@ SOURCES = Path("catalog-sources.json")
 SHELL = Path("shell")
 PUBLIC_KEY_FILE = Path("app/src/main/assets/ai-pages-public.txt")
 ASSETS = ("index.html", "app.js", "style.css")
-MAX_SIZE = 900_000
+MAX_SIZE = 6_000_000
+CATALOG_FILE = "catalog.json"
 
 
 def sources():
@@ -24,7 +25,7 @@ def sources():
         raise ValueError("List at least one tool in catalog-sources.json.")
     ids = set()
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) - {"accepts"} != {"id", "title", "repository", "ref", "private"}:
+        if not isinstance(entry, dict) or set(entry) - {"accepts", "minCatalog", "legacyAccepts"} != {"id", "title", "repository", "ref", "private"}:
             raise ValueError("Each source must provide id, title, repository, ref and private.")
         tool_id = entry["id"]
         if not isinstance(tool_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,39}", tool_id) or tool_id in ids:
@@ -109,7 +110,7 @@ def signed_catalog(entries, artifacts, key, previous_pages):
         "payload": base64.b64encode(payload).decode(),
         "signature": base64.b64encode(signature).decode(),
     })
-    if len(envelope) > MAX_SIZE:
+    if len(envelope) > (900_000 if CATALOG_FILE == "catalog.json" else MAX_SIZE):
         raise ValueError("The catalog exceeds the Android shell's size limit.")
     return revision, envelope
 
@@ -122,7 +123,7 @@ class NoRedirect(HTTPRedirectHandler):
 def github(method, body=None):
     repository = os.environ["GITHUB_REPOSITORY"]
     request = Request(
-        f"https://api.github.com/repos/{repository}/contents/feed/catalog.json",
+        f"https://api.github.com/repos/{repository}/contents/feed/{CATALOG_FILE}",
         data=None if body is None else json_bytes(body),
         headers={
             "Accept": "application/vnd.github+json",
@@ -146,7 +147,18 @@ def publish(entries, artifacts):
         if error.code != 404:
             raise
         existing = None
-    previous_envelope = base64.b64decode(existing["content"]) if existing else b""
+    previous_envelope = b""
+    if existing:
+        if existing.get("content"):
+            previous_envelope = base64.b64decode(existing["content"])
+        else:
+            # GitHub omits inline Contents data for files larger than 1 MiB.
+            blob_url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/git/blobs/{existing['sha']}"
+            request = Request(blob_url, headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}"})
+            with build_opener(NoRedirect()).open(request, timeout=30) as response:
+                previous_envelope = base64.b64decode(json.load(response)["content"])
+    elif CATALOG_FILE != "catalog.json" and Path("feed/catalog.json").exists():
+        previous_envelope = Path("feed/catalog.json").read_bytes()
 
     with tempfile.TemporaryDirectory() as directory:
         key = Path(directory) / "private.pem"
@@ -161,7 +173,7 @@ def publish(entries, artifacts):
             raise ValueError("AI_PAGES_SIGNING_KEY does not match the public key committed to AI Pages.")
         revision, envelope = signed_catalog(entries, artifacts, key, published_pages(previous_envelope))
 
-    if previous_envelope == envelope:
+    if existing and previous_envelope == envelope:
         print("The catalog is already up to date.")
         return
     body = {
@@ -172,10 +184,11 @@ def publish(entries, artifacts):
     if existing:
         body["sha"] = existing["sha"]
     github("PUT", body)
-    print(f"Published {len(entries)} tool(s) to feed/catalog.json.")
+    print(f"Published {len(entries)} tool(s) to feed/{CATALOG_FILE}.")
 
 
 def main():
+    global CATALOG_FILE
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifacts", type=Path)
     args = parser.parse_args()
@@ -183,6 +196,10 @@ def main():
     if args.artifacts is None:
         print(json_bytes(entries).decode())
     else:
+        legacy = [dict(entry, accepts=entry.get("legacyAccepts", entry.get("accepts", [])))
+                  for entry in entries if entry.get("minCatalog", 1) == 1]
+        publish(legacy, args.artifacts)
+        CATALOG_FILE = "catalog-v2.json"
         publish(entries, args.artifacts)
 
 

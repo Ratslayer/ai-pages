@@ -62,7 +62,7 @@ public final class MainActivity extends ComponentActivity {
     private static final int MAX_DATA = 350_000;
     private static final String FINISH_SIGN_IN = "app.aipages.FINISH_SIGN_IN";
     private static final String SIGN_IN_ACTION_ID = "app.aipages.SIGN_IN_ACTION_ID";
-    private static final String CSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; "
+    private static final String CSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; font-src 'self' data: blob:; "
             + "base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
     private enum Route { HOME, SETTINGS, RECOVERY, TOOL }
 
@@ -595,10 +595,40 @@ public final class MainActivity extends ComponentActivity {
     private void handleFiles(WebScreen screen, JavaScriptReplyProxy proxy, String id, String method, JSONObject args) throws Exception {
         if ("ui.navigation".equals(method)) {
             screen.handlesBack = args.optBoolean("handlesBack");
+            if (args.has("zoom")) {
+                screen.view.getSettings().setBuiltInZoomControls(args.getBoolean("zoom"));
+                screen.view.getSettings().setDisplayZoomControls(false);
+                screen.view.getSettings().setUseWideViewPort(args.getBoolean("zoom"));
+            }
             boolean enabled = args.optBoolean("pullToRefresh");
             screen.toolRefresh.setEnabled(enabled);
             screen.toolRefresh.setRefreshing(enabled && args.optBoolean("refreshing"));
             reply(proxy,id,true,null);
+            return;
+        }
+        if ("files.incoming".equals(method)) {
+            Uri uri = incomingPdf;
+            if (uri == null || !screen.page.accepts().contains(getIntent().getType())) {
+                reply(proxy, id, null, null);
+                return;
+            }
+            if (screen.busy) throw new IOException("Finish the current action first.");
+            String path = args.getString("path");
+            screen.busy = true;
+            fileIO.execute(() -> {
+                try {
+                    importFile(screen, path, uri);
+                    runOnUiThread(() -> {
+                        if (activePage == screen && incomingPdf == uri) {
+                            incomingPdf = null;
+                            setIntent(new Intent(this, MainActivity.class));
+                        }
+                        complete(screen, proxy, id, true, null);
+                    });
+                } catch (Exception e) {
+                    runOnUiThread(() -> complete(screen, proxy, id, null, message(e, "Could not open document.")));
+                }
+            });
             return;
         }
         if ("files.pick".equals(method) || "files.export".equals(method)) {
@@ -740,6 +770,13 @@ public final class MainActivity extends ComponentActivity {
                 }).setOnCancelListener(dialog -> finishPhoto(screen, false, null)).show();
     }
 
+    private void importFile(WebScreen screen, String path, Uri uri) throws IOException {
+        try (InputStream input = getContentResolver().openInputStream(uri)) {
+            if (input == null) throw new IOException("Could not open document.");
+            screen.files.copyIn(path, input, ToolFiles.LIMIT);
+        }
+    }
+
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         Uri uri = data == null ? null : data.getData();
@@ -764,11 +801,8 @@ public final class MainActivity extends ComponentActivity {
                     Object value;
                     StorageUpgrade.run(this);
                     if(request==PICK_FILE){
-                        try(InputStream in=getContentResolver().openInputStream(uri)){
-                            if(in==null)throw new IOException("Could not open document.");
-                            screen.files.copyIn(args.getString("path"),in,ToolFiles.LIMIT);
-                            value=true;
-                        }
+                        importFile(screen, args.getString("path"), uri);
+                        value=true;
                     }else{
                         // Export to a fresh document. A provider may truncate an existing file
                         // before a failed or interrupted stream can be recovered.

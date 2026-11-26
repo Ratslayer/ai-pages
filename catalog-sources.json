@@ -12,6 +12,19 @@
     "repository": "Ratslayer/language",
     "ref": "main",
     "private": false,
-    "accepts": ["application/pdf"]
+    "legacyAccepts": [
+      "application/pdf"
+    ]
+  },
+  {
+    "id": "reader",
+    "title": "PDF Reader",
+    "repository": "Ratslayer/reader",
+    "ref": "main",
+    "private": false,
+    "accepts": [
+      "application/pdf"
+    ],
+    "minCatalog": 2
   }
 ]

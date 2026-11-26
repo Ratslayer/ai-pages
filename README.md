@@ -78,3 +78,5 @@ Tool entries can declare accepted MIME types in the catalogue's optional `accept
 ## Build
 
 With JDK 17, Gradle 8.13, and Android SDK platform 36, run `bash tests/check-java.sh` and `gradle lintDebug assembleDebug`. The APK is at `app/build/outputs/apk/debug/app-debug.apk`.
+
+AI Pages 0.3.1 adds PDF Reader to the signed catalogue. Tools can use `files.incoming` with a private destination `path` to copy an incoming document as original bytes. It returns true on success and null when no matching file is pending. Set `zoom: true` in `ui.navigation` to enable WebView pinch zoom. The larger catalogue is published to `feed/catalog-v2.json`; earlier APKs continue receiving their compatible catalogue and PDF import route.

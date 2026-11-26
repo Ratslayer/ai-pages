@@ -33,11 +33,11 @@ final class PageFeed {
             "https://raw.githubusercontent.com/Ratslayer/ai-pages/refs/heads/main/";
     private static final String PUBLIC_MIRROR = "https://cdn.jsdelivr.net/gh/Ratslayer/ai-pages@main/";
     private static final String API_CONTENTS = "https://api.github.com/repos/Ratslayer/ai-pages/contents/";
-    private static final String CATALOG_PATH = "feed/catalog.json";
+    private static final String CATALOG_PATH = "feed/catalog-v2.json";
     private static final String KEY_FILE = "ai-pages-public.txt";
     private static final String KEY_PATH = "app/src/main/assets/" + KEY_FILE;
     private static final int MAX_KEY_SIZE = 4_096;
-    private static final int MAX_SIZE = 900_000;
+    private static final int MAX_SIZE = 6_000_000;
     static final List<String> ASSETS = Arrays.asList("index.html", "app.js", "style.css");
 
     record Page(String id, String title, Map<String, String> files, List<String> accepts) {}
