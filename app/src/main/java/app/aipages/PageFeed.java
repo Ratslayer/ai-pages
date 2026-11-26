@@ -40,7 +40,7 @@ final class PageFeed {
     private static final int MAX_SIZE = 900_000;
     static final List<String> ASSETS = Arrays.asList("index.html", "app.js", "style.css");
 
-    record Page(String id, String title, Map<String, String> files) {}
+    record Page(String id, String title, Map<String, String> files, List<String> accepts) {}
     record Catalog(String revision, Map<String, Page> pages, Page home, Page settings) {}
 
     private static final Catalog EMPTY = new Catalog("", Collections.emptyMap(), null, null);
@@ -265,14 +265,17 @@ final class PageFeed {
                     || pages.containsKey(id)) {
                 throw new IOException("The tool catalog contains an invalid page.");
             }
-            pages.put(id, new Page(id, title, assets(item.getJSONObject("files"))));
+            List<String> accepts = new java.util.ArrayList<>();
+            JSONArray types = item.optJSONArray("accepts");
+            if (types != null) for (int i=0; i<types.length(); i++) accepts.add(types.getString(i));
+            pages.put(id, new Page(id, title, assets(item.getJSONObject("files")), accepts));
         }
         Page home = null;
         Page settings = null;
         if (catalog.has("shell")) {
             JSONObject shell = catalog.getJSONObject("shell");
-            home = new Page("home", "Home", assets(shell.getJSONObject("home")));
-            settings = new Page("settings", "Settings", assets(shell.getJSONObject("settings")));
+            home = new Page("home", "Home", assets(shell.getJSONObject("home")), Collections.emptyList());
+            settings = new Page("settings", "Settings", assets(shell.getJSONObject("settings")), Collections.emptyList());
         }
         return new Catalog(catalog.getString("revision"), pages, home, settings);
     }

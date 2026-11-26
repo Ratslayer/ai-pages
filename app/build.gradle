@@ -13,8 +13,8 @@ android {
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         minSdk 28
         targetSdk 36
-        versionCode 14
-        versionName '0.2.7'
+        versionCode 15
+        versionName '0.3.0'
     }
     if (updateKeystore) {
         signingConfigs {

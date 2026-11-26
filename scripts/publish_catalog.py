@@ -24,11 +24,14 @@ def sources():
         raise ValueError("List at least one tool in catalog-sources.json.")
     ids = set()
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != {"id", "title", "repository", "ref", "private"}:
+        if not isinstance(entry, dict) or set(entry) - {"accepts"} != {"id", "title", "repository", "ref", "private"}:
             raise ValueError("Each source must provide id, title, repository, ref and private.")
         tool_id = entry["id"]
         if not isinstance(tool_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,39}", tool_id) or tool_id in ids:
             raise ValueError("Tool IDs must be unique and match [a-z][a-z0-9-]{0,39}.")
+        accepts = entry.get("accepts", [])
+        if not isinstance(accepts, list) or any(not isinstance(m, str) or not re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", m) for m in accepts):
+            raise ValueError(f"Invalid accepted MIME types for {tool_id}.")
         ids.add(tool_id)
         title = entry["title"]
         if not isinstance(title, str) or not title.strip() or len(title.encode("utf-16-le")) > 160:
@@ -74,9 +77,12 @@ def signed_catalog(entries, artifacts, key, previous_pages):
         version = previous.get("version")
         if type(version) is not int or version < 1:
             version = 1
-        elif files != previous.get("files"):
+        elif files != previous.get("files") or entry.get("accepts", []) != previous.get("accepts", []):
             version += 1
         pages.append({"id": tool_id, "title": entry["title"], "version": version, "files": files})
+
+        if entry.get("accepts"):
+            pages[-1]["accepts"] = entry["accepts"]
 
     bridge = read_asset(SHELL / "bridge.js")
     style = read_asset(SHELL / "style.css")

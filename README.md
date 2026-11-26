@@ -46,7 +46,7 @@ If you deliberately rotate the signing key, update the secret and the committed 
 
 Add new pages to [catalog-sources.json](catalog-sources.json). Each source repo uses Node 22 and emits `dist/index.html`, `dist/app.js`, and `dist/style.css` with `npm ci` and `npm run build`. Add a new private source to the read token's repository access. Public sources need only a list entry. The compiled pages are published in the public AI Pages catalog.
 
-To back up one tool, open it and tap **Backup**. Pick an on-device location or a cloud provider available in the Android file picker. **Restore** replaces that tool's local data. Treat the exported JSON as private. It includes entries and settings for the tool. It excludes sign-in credentials and photos. It does not sync devices.
+To back up one tool, open it and tap **Backup**. Pick an on-device location or a cloud provider available in the Android file picker. **Restore** replaces that tool's JSON state. Tools can export larger private files through the document picker. Treat the exported JSON as private. It includes entries and settings for the tool. It excludes sign-in credentials and photos. It does not sync devices.
 
 ## Bridge version 1
 
@@ -59,6 +59,21 @@ A verified tool supplies `index.html`, `app.js`, and `style.css`. The shell serv
 | `text.pick` | Opens a UTF-8 file. Pass `includePdf: true` on Android 0.2.2+ to also accept selectable-text PDFs. Returns `{name, text}` or `null` on cancellation. |
 | `photos.pick` | Opens the Android library or camera and returns whether a photo was selected. |
 | `ai.run` | Takes a `prompt` and optional `image: true`. Runs text prompts immediately and asks for confirmation when attaching a photo. Returns the completed response text. |
+
+### Private files and navigation (Android 0.3.0)
+
+Every tool gets a durable private directory keyed by its signed page ID. Paths are relative, including subdirectories. Jobs that replace a whole file can write chunks to a temporary path and publish it with an atomic move.
+
+| Method | Input and output |
+| --- | --- |
+| `files.available`, `files.list`, `files.size` | Probe support, list names under an optional `path`, or get a file size in bytes (−1 for a missing file). |
+| `files.read`, `files.write` | Read up to 192 KiB at a byte `offset` as Base64. Write Base64 `data` at offset zero to replace or at the current length to append. Maximum file size is 64 MiB. |
+| `files.move`, `files.remove` | Atomically move `path` to `to`, or remove `path`. |
+| `files.pick`, `files.export` | Use the system document picker to copy into or out of `path`. Pass `mime` and an export `name`. Cancellation returns null. |
+| `files.downloadDrive` | Download a link-readable Drive `fileId` to `path`, with an optional `maxBytes`. A failed download preserves the previous file. |
+| `ui.navigation` | Configure `handlesBack`, `pullToRefresh`, and `refreshing`. The page receives `tool-back` and `tool-refresh` events. |
+
+Tool entries can declare accepted MIME types in the catalogue's optional `accepts` list. AI Pages routes incoming PDFs to a matching tool. Call `text.incoming` to consume a pending document. Both text actions accept a private destination `path` and `pageBreaks: true` to preserve PDF page boundaries as form feeds.
 
 ## Build
 

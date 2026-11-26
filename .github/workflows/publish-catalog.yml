@@ -7,7 +7,7 @@ on:
     paths:
       - 'shell/**'
       - 'catalog-sources.json'
-      - 'app/src/main/java/app/aipages/ReaderBooks.java'
+      - 'scripts/publish_catalog.py'
 
 permissions:
   contents: read
