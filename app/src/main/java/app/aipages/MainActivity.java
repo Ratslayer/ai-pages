@@ -506,7 +506,9 @@ public final class MainActivity extends ComponentActivity {
             SwipeRefreshLayout refresh = new SwipeRefreshLayout(this);
             if(tool)screen.toolRefresh=refresh;
             else screen.catalogRefresh = refresh;
-            refresh.addView(view);
+            // WRAP_CONTENT makes WebView use a zero CSS layout height, even when
+            // SwipeRefreshLayout measures its child to exactly fill the screen.
+            refresh.addView(view, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
             refresh.setColorSchemeColors(Color.rgb(36, 97, 69));
             refresh.setOnChildScrollUpCallback((parent, child) -> view.canScrollVertically(-1));
             refresh.setEnabled(!tool && !signingIn);
