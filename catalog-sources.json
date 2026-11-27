@@ -10,7 +10,7 @@
     "id": "language",
     "title": "Language Reader",
     "repository": "Ratslayer/language",
-    "ref": "refs/heads/main",
+    "ref": "main",
     "private": false,
     "legacyAccepts": [
       "application/pdf"
