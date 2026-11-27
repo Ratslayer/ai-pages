@@ -59,6 +59,8 @@ A verified tool supplies `index.html`, `app.js`, and `style.css`. The shell serv
 | `text.pick` | Opens a UTF-8 file. Pass `includePdf: true` on Android 0.2.2+ to also accept selectable-text PDFs. Returns `{name, text}` or `null` on cancellation. |
 | `photos.pick` | Opens the Android library or camera and returns whether a photo was selected. |
 | `ai.run` | Takes a `prompt` and optional `image: true`. Runs text prompts immediately and asks for confirmation when attaching a photo. Returns the completed response text. |
+| `speech.speak` (0.3.3+) | Takes `text` and a BCP 47 `language` tag. Uses an installed offline Android voice. A new request replaces the previous one. Resolves to `spoken`, `stopped`, or `missing-voice`. |
+| `speech.stop`, `speech.installVoices` (0.3.3+) | Stop playback or open Android's voice-data installer. |
 
 ### Private files and navigation (Android 0.3.0)
 

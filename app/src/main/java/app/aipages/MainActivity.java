@@ -237,6 +237,7 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private void destroyPage() {
+        releaseSpeech();
         WebView view = activePage.view;
         if (view.getParent() instanceof ViewGroup parent) parent.removeView(view);
         view.destroy();
@@ -538,6 +539,24 @@ public final class MainActivity extends ComponentActivity {
                 return;
             }
             switch (method) {
+                case "speech.speak" -> {
+                    if (screen.speech == null) screen.speech = new ToolSpeech(this);
+                    String requestId = id;
+                    screen.speech.speak(id, request.getString("text"), request.getString("language"),
+                            (result, error) -> { if (activePage == screen) reply(proxy, requestId, result, error); });
+                }
+                case "speech.stop" -> {
+                    if (screen.speech != null) screen.speech.stop();
+                    reply(proxy, id, true, null);
+                }
+                case "speech.installVoices" -> {
+                    try {
+                        startActivity(new Intent(android.speech.tts.TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA));
+                        reply(proxy, id, true, null);
+                    } catch (ActivityNotFoundException e) {
+                        throw new IOException("Open Android text-to-speech settings to install voice data.");
+                    }
+                }
                 case "storage.read" -> reply(proxy, id, screen.data.getString("state", null), null);
                 case "storage.write" -> {
                     if (screen.busy) throw new IOException("Finish the current action first.");
@@ -1125,6 +1144,18 @@ public final class MainActivity extends ComponentActivity {
         }
     }
 
+    private void releaseSpeech() {
+        if (activePage != null && activePage.speech != null) {
+            activePage.speech.close();
+            activePage.speech = null;
+        }
+    }
+
+    @Override protected void onStop() {
+        releaseSpeech();
+        super.onStop();
+    }
+
     @Override protected void onDestroy() {
         clearFinishSignInAction();
         close(pendingSignIn);
@@ -1147,6 +1178,7 @@ public final class MainActivity extends ComponentActivity {
         SwipeRefreshLayout catalogRefresh;
         SwipeRefreshLayout toolRefresh;
         boolean handlesBack;
+        ToolSpeech speech;
         final ToolFiles files;
         final DocumentLinks links;
         boolean busy;
